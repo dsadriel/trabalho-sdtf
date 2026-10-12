@@ -1,7 +1,7 @@
 import socket
 
 from common.protocol import Message
-from server.interface import print_server_duplicate, print_server_request
+from server.interface import ServerInterface
 from server.state import ServerState
 
 
@@ -10,6 +10,7 @@ def handle_request(
     addr: tuple[str, int],
     msg: Message,
     state: ServerState,
+    interface: ServerInterface | None = None,
     show_port: bool = False,
 ) -> None:
     """Processes an incoming REQUEST message and sends back an ACK."""
@@ -30,13 +31,14 @@ def handle_request(
         # acknowledged as soon as state processing completes.
         ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
         sock.sendto(ack.encode(), addr)
-        print_server_duplicate(
-            client_display=client_display,
-            id_req=msg.id_req,
-            value=msg.value,
-            num_reqs=num_reqs,
-            total_sum=total_sum,
-        )
+        if interface:
+            interface.print_duplicate(
+                client_display=client_display,
+                id_req=msg.id_req,
+                value=msg.value,
+                num_reqs=num_reqs,
+                total_sum=total_sum,
+            )
 
     elif status == "GAP":
         # Gap format (id_req > last_req + 1): intermediate packet was lost.
@@ -49,13 +51,14 @@ def handle_request(
     else:
         ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
         sock.sendto(ack.encode(), addr)
-        print_server_request(
-            client_display=client_display,
-            id_req=msg.id_req,
-            value=msg.value,
-            num_reqs=num_reqs,
-            total_sum=total_sum,
-        )
+        if interface:
+            interface.print_request(
+                client_display=client_display,
+                id_req=msg.id_req,
+                value=msg.value,
+                num_reqs=num_reqs,
+                total_sum=total_sum,
+            )
 
 
 def handle_exit(

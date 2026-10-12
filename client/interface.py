@@ -18,13 +18,11 @@ def screen_writer(
     """
     while True:
         message = output_queue.get()
-        """
         if message is None:
             output_queue.task_done()
             break
 
         print(message, flush=True)
-        """
         output_queue.task_done()
 
 

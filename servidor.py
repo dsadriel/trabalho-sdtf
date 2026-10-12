@@ -5,7 +5,7 @@ from common.config import BUFFER_SIZE
 from common.protocol import Message, MessageType
 from common.utils import parse_port
 from server.discovery import handle_discovery
-from server.interface import print_server_startup
+from server.interface import ServerInterface
 from server.processing import handle_exit, handle_request
 from server.state import ServerState
 
@@ -33,15 +33,17 @@ def main() -> None:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
 
-    # Initialize shared server state
+    # Initialize shared server state and interface subservices
     state = ServerState()
+    interface = ServerInterface()
+    interface.start()
 
     # Open UDP socket bound to all network interfaces on the specified port
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("", network_port))
 
     # Required output format upon startup: <data> num_reqs 0 total_sum 0
-    print_server_startup(state.num_reqs, state.total_sum)
+    interface.print_startup(state.num_reqs, state.total_sum)
 
     try:
         while True:
@@ -55,7 +57,14 @@ def main() -> None:
             if msg.type == MessageType.DISCOVERY:
                 handle_discovery(sock, client_addr, state)
             elif msg.type == MessageType.REQUEST:
-                handle_request(sock, client_addr, msg, state, show_port=show_port)
+                handle_request(
+                    sock,
+                    client_addr,
+                    msg,
+                    state,
+                    interface=interface,
+                    show_port=show_port,
+                )
             elif msg.type == MessageType.EXIT:
                 handle_exit(sock, client_addr, state, show_port=show_port)
 
@@ -63,6 +72,7 @@ def main() -> None:
         pass
     finally:
         sock.close()
+        interface.stop()
 
 
 if __name__ == "__main__":
