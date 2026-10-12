@@ -26,6 +26,10 @@ def handle_request(
 
     # Format output using server interface subservicing
     if status == "DUPLICATE":
+        # Reply before logging: stdout may block, but the client must be
+        # acknowledged as soon as state processing completes.
+        ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
+        sock.sendto(ack.encode(), addr)
         print_server_duplicate(
             client_display=client_display,
             id_req=msg.id_req,
@@ -33,9 +37,6 @@ def handle_request(
             num_reqs=num_reqs,
             total_sum=total_sum,
         )
-        # Resend ACK for the requested id_req confirming it was already processed
-        ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
-        sock.sendto(ack.encode(), addr)
 
     elif status == "GAP":
         # Gap format (id_req > last_req + 1): intermediate packet was lost.
@@ -46,6 +47,8 @@ def handle_request(
         sock.sendto(ack.encode(), addr)
 
     else:
+        ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
+        sock.sendto(ack.encode(), addr)
         print_server_request(
             client_display=client_display,
             id_req=msg.id_req,
@@ -53,8 +56,6 @@ def handle_request(
             num_reqs=num_reqs,
             total_sum=total_sum,
         )
-        ack = Message.ack(id_req=msg.id_req, num_reqs=num_reqs, total_sum=total_sum)
-        sock.sendto(ack.encode(), addr)
 
 
 def handle_exit(

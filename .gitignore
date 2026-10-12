@@ -6,5 +6,6 @@ __pycache__/
 .DS_Store
 
 # Test generated data & packages
-test_data/
+#test_data/
 *.zip
+temp_parts
