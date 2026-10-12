@@ -46,17 +46,19 @@ python3 cliente.py 4000 < test_data/test_1000.txt > /dev/null
 
 ---
 
-## Protocolo de Comunicação (JSON sobre UDP)
+## Protocolo Binário (Network Byte Order sobre UDP)
 
-As mensagens são serializadas em JSON codificado em UTF-8:
+As mensagens usam um formato binário de tamanho fixo. O primeiro byte identifica o tipo da mensagem; os campos numéricos são inteiros sem sinal de 64 bits (`uint64`) codificados em big-endian (Network Byte Order). Assim, `DISCOVERY`, `DISCOVERY_RESP` e `EXIT` ocupam 1 byte, `REQUEST` ocupa 17 bytes e `ACK` ocupa 25 bytes.
 
-| Mensagem (`type`) | Direção | Campos | Descrição |
-| :--- | :--- | :--- | :--- |
-| `DISCOVERY` | Cliente $\rightarrow$ Servidor (Broadcast) | — | Procura o servidor na rede local |
-| `DISCOVERY_RESP` | Servidor $\rightarrow$ Cliente (Unicast) | — | Resposta de confirmação da descoberta |
-| `REQUEST` | Cliente $\rightarrow$ Servidor (Unicast) | `id_req` (uint64), `value` (int) | Envio de número para soma |
-| `ACK` | Servidor $\rightarrow$ Cliente (Unicast) | `id_req` (uint64), `num_reqs` (uint64), `total_sum` (uint64) | Confirmação com soma acumulada |
-| `EXIT` | Cliente $\rightarrow$ Servidor (Unicast) | — | Aviso de encerramento da sessão do cliente |
+| Tag | Mensagem | Direção | Campos após a tag | Tamanho total |
+| :--- | :--- | :--- | :--- | :--- |
+| `1` | `DISCOVERY` | Cliente $\rightarrow$ Servidor (Broadcast) | — | 1 byte |
+| `2` | `DISCOVERY_RESP` | Servidor $\rightarrow$ Cliente (Unicast) | — | 1 byte |
+| `3` | `REQUEST` | Cliente $\rightarrow$ Servidor (Unicast) | `id_req` (uint64), `value` (uint64) | 17 bytes |
+| `4` | `ACK` | Servidor $\rightarrow$ Cliente (Unicast) | `id_req` (uint64), `num_reqs` (uint64), `total_sum` (uint64) | 25 bytes |
+| `5` | `EXIT` | Cliente $\rightarrow$ Servidor (Unicast) | — | 1 byte |
+
+O prefixo `!` do formato do Python `struct` força ordem big-endian e inteiros sem sinal de largura fixa, independente da arquitetura do processador. Portanto, todos os campos numéricos transmitidos suportam valores de `0` a `2^64 - 1` (os campos da requisição são positivos). Mensagens com tag desconhecida ou tamanho incorreto são rejeitadas.
 
 ---
 
@@ -94,7 +96,7 @@ trabalho-sdtf/
 │   ├── processing.py        # Processamento (envia requisições e retransmite com timeout)
 │   └── interface.py         # Interface multithread (thread leitora de stdin e escritora na tela)
 ├── common/
-│   ├── protocol.py          # Definição unificada da classe Message e serialização JSON
+│   ├── protocol.py          # Definição unificada da classe Message e serialização binária big-endian
 │   ├── config.py            # Constantes de rede (buffer, timeouts, limites de portas)
 │   └── utils.py             # Utilitários compartilhados (timestamp formatado e parser de porta)
 ├── test_data/               # Datasets de teste incrementais (10 a 100.000 números) e gabaritos

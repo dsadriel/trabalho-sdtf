@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import struct
 from enum import StrEnum
 from typing import Any
 
@@ -14,6 +14,22 @@ class MessageType(StrEnum):
     REQUEST = "REQUEST"
     ACK = "ACK"
     EXIT = "EXIT"
+
+
+_MESSAGE_LAYOUTS: dict[
+    MessageType, tuple[int, struct.Struct, tuple[str, ...]]
+] = {
+    MessageType.DISCOVERY: (1, struct.Struct("!B"), ()),
+    MessageType.DISCOVERY_RESP: (2, struct.Struct("!B"), ()),
+    MessageType.REQUEST: (3, struct.Struct("!BQQ"), ("id_req", "value")),
+    MessageType.ACK: (
+        4,
+        struct.Struct("!BQQQ"),
+        ("id_req", "num_reqs", "total_sum"),
+    ),
+    MessageType.EXIT: (5, struct.Struct("!B"), ()),
+}
+_TYPE_BY_TAG = {tag: msg_type for msg_type, (tag, _, _) in _MESSAGE_LAYOUTS.items()}
 
 
 class Message:
@@ -94,29 +110,48 @@ class Message:
     # Serialization and Deserialization
 
     def encode(self) -> bytes:
-        """Serializes the message to UTF-8 encoded JSON bytes."""
-        data = {"type": self.type.value, **self.payload}
-        return json.dumps(data).encode("utf-8")
+        """Serializes the message using fixed-width network byte order fields."""
+        try:
+            tag, layout, fields = _MESSAGE_LAYOUTS[self.type]
+        except KeyError:
+            raise ValueError(f"Unknown message type: {self.type}") from None
+
+        if self.payload.keys() != set(fields):
+            raise ValueError(
+                f"Invalid fields for {self.type.value}: expected {fields}"
+            )
+        try:
+            return layout.pack(tag, *(self.payload[field] for field in fields))
+        except (struct.error, TypeError) as error:
+            raise ValueError(f"Invalid {self.type.value} payload: {error}") from None
 
     @classmethod
     def decode(cls, raw_bytes: bytes) -> Message:
-        """Decodes UTF-8 encoded JSON bytes from the network into a Message instance."""
+        """Decodes a fixed-width network byte order message."""
         if not raw_bytes:
             raise ValueError("Cannot decode empty data")
 
         try:
-            data = json.loads(raw_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError(f"Invalid JSON payload: {error}") from None
+            (tag,) = struct.unpack("!B", raw_bytes[:1])
+        except struct.error as error:
+            raise ValueError(f"Invalid binary payload: {error}") from None
 
-        if not isinstance(data, dict) or "type" not in data:
-            raise ValueError("Missing 'type' field in payload")
-
-        type_str = data.pop("type")
         try:
-            msg_type = MessageType(type_str)
-        except ValueError:
-            raise ValueError(f"Unknown message type: {type_str}") from None
+            msg_type = _TYPE_BY_TAG[tag]
+        except KeyError:
+            raise ValueError(f"Unknown message type tag: {tag}") from None
+
+        _, layout, fields = _MESSAGE_LAYOUTS[msg_type]
+        if len(raw_bytes) != layout.size:
+            raise ValueError(
+                f"Invalid {msg_type.value} message size: "
+                f"expected {layout.size}, got {len(raw_bytes)}"
+            )
+
+        try:
+            values = layout.unpack(raw_bytes)[1:]
+        except struct.error as error:
+            raise ValueError(f"Invalid binary payload: {error}") from None
 
         if msg_type == MessageType.DISCOVERY:
             return cls.discovery()
@@ -125,17 +160,8 @@ class Message:
         elif msg_type == MessageType.EXIT:
             return cls.exit()
         elif msg_type == MessageType.REQUEST:
-            if "id_req" not in data or "value" not in data:
-                raise ValueError("REQUEST message missing 'id_req' or 'value'")
-            return cls.request(id_req=data["id_req"], value=data["value"])
+            return cls.request(**dict(zip(fields, values)))
         elif msg_type == MessageType.ACK:
-            for field in ("id_req", "num_reqs", "total_sum"):
-                if field not in data:
-                    raise ValueError(f"ACK message missing '{field}'")
-            return cls.ack(
-                id_req=data["id_req"],
-                num_reqs=data["num_reqs"],
-                total_sum=data["total_sum"],
-            )
+            return cls.ack(**dict(zip(fields, values)))
 
         raise ValueError(f"Unhandled message type: {msg_type}")
