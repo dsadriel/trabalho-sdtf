@@ -22,7 +22,6 @@ def send_request_and_wait_ack(
 
         except (socket.timeout, TimeoutError):
             # Timeout expired, retransmit the request]
-            print("Timeout")
             continue
         except ValueError:
             # Ignore invalid packets
