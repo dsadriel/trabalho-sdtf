@@ -13,14 +13,26 @@ class MessageType(StrEnum):
     DISCOVERY_RESP = "DISCOVERY_RESP"
     REQUEST = "REQUEST"
     ACK = "ACK"
+    HISTORY_GAP = "HISTORY_GAP"
     EXIT = "EXIT"
+    JOIN = "JOIN"
+    SNAP = "SNAP"
+    READY = "READY"
+    VIEW = "VIEW"
+    ALIVE = "ALIVE"
+    HEARTBEAT = "HEARTBEAT"
+    OP = "OP"
+    RESULT = "RESULT"
+    TOKEN = "TOKEN"
+    HOP_ACK = "HOP_ACK"
+    WIN = "WIN"
 
 
 class Message:
     """Unified network message for the application protocol."""
 
     def __init__(self, msg_type: MessageType, **kwargs: Any) -> None:
-        self.type = msg_type
+        self.type = MessageType(msg_type)
         self.payload = kwargs
 
     def __eq__(self, other: object) -> bool:
@@ -46,12 +58,17 @@ class Message:
         return cls(MessageType.EXIT)
 
     @classmethod
-    def request(cls, id_req: int, value: int) -> Message:
-        if not isinstance(id_req, int) or not 1 <= id_req <= UINT64_MAX:
+    def request(cls, id_req: int, value: int, session: str | None = None) -> Message:
+        if type(id_req) is not int or not 1 <= id_req <= UINT64_MAX:
             raise ValueError(f"id_req {id_req} must be a positive 64-bit unsigned integer")
-        if not isinstance(value, int) or not 1 <= value <= UINT64_MAX:
+        if type(value) is not int or not 1 <= value <= UINT64_MAX:
             raise ValueError(f"value {value} must be a positive integer (1 to 2^64-1)")
-        return cls(MessageType.REQUEST, id_req=id_req, value=value)
+        fields = dict(id_req=id_req, value=value)
+        if session is not None:
+            if not isinstance(session, str) or len(session) != 32:
+                raise ValueError("session must be a 32-character identifier")
+            fields['session'] = session
+        return cls(MessageType.REQUEST, **fields)
 
     @classmethod
     def ack(cls, id_req: int, num_reqs: int, total_sum: int) -> Message:
@@ -127,7 +144,7 @@ class Message:
         elif msg_type == MessageType.REQUEST:
             if "id_req" not in data or "value" not in data:
                 raise ValueError("REQUEST message missing 'id_req' or 'value'")
-            return cls.request(id_req=data["id_req"], value=data["value"])
+            return cls.request(id_req=data["id_req"], value=data["value"], session=data.get("session"))
         elif msg_type == MessageType.ACK:
             for field in ("id_req", "num_reqs", "total_sum"):
                 if field not in data:
@@ -138,4 +155,4 @@ class Message:
                 total_sum=data["total_sum"],
             )
 
-        raise ValueError(f"Unhandled message type: {msg_type}")
+        return cls(msg_type, **data)

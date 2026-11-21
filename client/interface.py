@@ -2,6 +2,7 @@ import queue
 import socket
 import sys
 import threading
+import uuid
 
 from client.processing import send_request_and_wait_ack
 from common.protocol import Message
@@ -33,7 +34,7 @@ def user_input_reader(
     stop_event: threading.Event,
 ) -> None:
     """Reads numbers from stdin, coordinates requests and queues output."""
-    server_ip = server_addr[0]
+    session = uuid.uuid4().hex
     id_req = 1
 
     try:
@@ -53,12 +54,13 @@ def user_input_reader(
                 # Ignore invalid non-integer inputs
                 continue
 
-            ack = send_request_and_wait_ack(sock, server_addr, id_req, value)
+            ack, server_addr = send_request_and_wait_ack(
+                sock, server_addr, id_req, value, session=session)
 
             # Format required by specification:
             # <data> server <ip> id_req <n> value <v> num_reqs <n> total_sum <s>
             log_line = (
-                f"{format_timestamp()} server {server_ip} "
+                f"{format_timestamp()} server {server_addr[0]} "
                 f"id_req {id_req} value {value} num_reqs {ack.num_reqs} total_sum {ack.total_sum}"
             )
             output_queue.put(log_line)
@@ -69,6 +71,10 @@ def user_input_reader(
         pass
     finally:
         stop_event.set()
+        try:
+            sock.sendto(Message.exit().encode(), server_addr)
+        except OSError:
+            pass
 
 
 def run_client_interface(sock: socket.socket, server_addr: tuple[str, int]) -> None:
@@ -97,12 +103,5 @@ def run_client_interface(sock: socket.socket, server_addr: tuple[str, int]) -> N
         pass
     finally:
         stop_event.set()
-        # Send EXIT message to server before terminating
-        try:
-            exit_msg = Message.exit().encode()
-            sock.sendto(exit_msg, server_addr)
-        except OSError:
-            pass
-
         output_queue.put(None)  # Sentinel to unblock writer thread
         writer.join(timeout=1.0)

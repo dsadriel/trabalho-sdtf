@@ -1,11 +1,12 @@
 import threading
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 
 @dataclass
 class ClientRecord:
     ip: str
     port: int = 0
+    session: str | None = None
     last_req: int = 0
     last_num_reqs: int = 0
     last_total_sum: int = 0
@@ -21,26 +22,20 @@ class ServerState:
     def __init__(self) -> None:
         self.num_reqs: int = 0
         self.total_sum: int = 0
-        self.clients: dict[tuple[str, int], ClientRecord] = {}
+        self.clients: dict[str | tuple[str, int], ClientRecord] = {}
         self._lock = threading.Lock()
 
-    def register_client(self, ip: str, port: int = 0) -> ClientRecord:
-        key = (ip, port)
+    def register_client(self, ip: str, port: int = 0, session: str | None = None) -> ClientRecord:
+        key = session if session is not None else (ip, port)
         with self._lock:
             if key not in self.clients:
-                new_client = ClientRecord(ip=ip, port=port)
+                new_client = ClientRecord(ip=ip, port=port, session=session)
                 self.clients[key] = new_client
                 return new_client
             return self.clients[key]
 
-    def remove_client(self, ip: str, port: int = 0) -> ClientRecord | None:
-        """Removes a client upon receiving an EXIT message."""
-        key = (ip, port)
-        with self._lock:
-            return self.clients.pop(key, None)
-
-    def get_client(self, ip: str, port: int = 0) -> ClientRecord | None:
-        key = (ip, port)
+    def get_client(self, ip: str, port: int = 0, session: str | None = None) -> ClientRecord | None:
+        key = session if session is not None else (ip, port)
         with self._lock:
             return self.clients.get(key)
 
@@ -49,7 +44,8 @@ class ServerState:
             return list(self.clients.values())
 
     def process_request(
-        self, address: str, id_req: int, value: int, port: int = 0
+        self, address: str, id_req: int, value: int, port: int = 0,
+        session: str | None = None
     ) -> tuple[str, int, int]:
         """Processes an incoming request under lock.
 
@@ -64,9 +60,9 @@ class ServerState:
         """
         ip = address
         with self._lock:
-            key = (ip, port)
+            key = session if session is not None else (ip, port)
             if key not in self.clients:
-                client = ClientRecord(ip=ip, port=port)
+                client = ClientRecord(ip=ip, port=port, session=session)
                 self.clients[key] = client
             else:
                 client = self.clients[key]
@@ -89,3 +85,19 @@ class ServerState:
             client.last_total_sum = self.total_sum
 
             return "NORMAL", self.num_reqs, self.total_sum
+
+    def snapshot(self):
+        """JSON-safe independent copy, including duplicate-detection records."""
+        with self._lock:
+            return [self.num_reqs, self.total_sum,
+                    [asdict(client) for client in self.clients.values()]]
+
+    def restore(self, snapshot):
+        num_reqs, total_sum, records = snapshot
+        clients = {}
+        for fields in records:
+            client = ClientRecord(**fields)
+            key = client.session if client.session is not None else (client.ip, client.port)
+            clients[key] = client
+        with self._lock:
+            self.num_reqs, self.total_sum, self.clients = num_reqs, total_sum, clients

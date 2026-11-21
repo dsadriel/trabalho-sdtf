@@ -9,6 +9,10 @@ Este documento registra cronologicamente todas as sessões e interações com as
 | ID | Data e Hora | Ferramenta / Modelo | Objetivo da Interação | Módulos Afetados | Status |
 | :---: | :---: | :---: | :--- | :--- | :---: |
 | **#01** | 10/11/2026 10:46 | Antigravity (Gemini 2.5 Flash) | Leitura da especificação da Parte 2 e estruturação dos arquivos de registro e integridade acadêmica | `agents.md`, `ai-sessions.md` | Concluído |
+| **#02** | 20/11/2026 | Codex | Explicação do fluxo, líder e replicação | `ai-sessions.md` | Concluído |
+| **#03** | 20/11/2026 | Codex | Explicação de VIEW e redescoberta do líder | `ai-sessions.md` | Concluído |
+| **#04** | 20/11/2026 | Codex | Timeouts, nomenclatura e funções anteriores | `ai-sessions.md` | Concluído |
+| **#05** | 20/11/2026 | Codex | Reorganização da Parte 2 a partir da Parte 1 | Cliente, servidor, protocolo, estado, testes e documentação | Testes aprovados; revisão humana pendente |
 
 ---
 
@@ -33,6 +37,7 @@ Este documento registra cronologicamente todas as sessões e interações com as
   - Estrutura do documento verificada contra as exigências do relatório técnico do PDF oficial `INF01085 - Trabalho_202602_P2.pdf`.
 
 ---
+
 
 ## 3. Template para Novas Sessões
 

@@ -42,13 +42,18 @@ class TestServerState(unittest.TestCase):
         self.assertEqual(re_registered.last_req, 3)
         self.assertEqual(re_registered.last_total_sum, 45)
 
-    def test_remove_client_on_exit(self):
-        self.state.register_client("192.168.1.100", port=4000)
-        self.assertIsNotNone(self.state.get_client("192.168.1.100", port=4000))
-
-        removed = self.state.remove_client("192.168.1.100", port=4000)
-        self.assertIsNotNone(removed)
-        self.assertIsNone(self.state.get_client("192.168.1.100", port=4000))
+    def test_snapshot_preserves_sessions_and_duplicate_detection(self):
+        import json
+        session = 'a' * 32
+        self.state.process_request('127.0.0.1', 1, 7, 5000, session=session)
+        snapshot = json.loads(json.dumps(self.state.snapshot()))
+        restored = ServerState()
+        restored.restore(snapshot)
+        result = restored.process_request('127.0.0.1', 1, 7, 6000, session=session)
+        self.assertEqual(result, ('DUPLICATE', 1, 7))
+        self.state.process_request('127.0.0.1', 2, 9, 5000, session=session)
+        self.assertEqual(restored.total_sum, 7)
+        self.assertEqual(snapshot[2][0]['last_req'], 1)
 
     def test_process_first_valid_request(self):
         self.state.register_client("1.1.1.2")

@@ -10,11 +10,16 @@ class TestDiscovery(unittest.TestCase):
     def test_discovery_handshake(self):
         # Setup mock server socket on loopback
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(server_sock.close)
+        server_sock.settimeout(1)
         server_sock.bind(("127.0.0.1", 0))
         server_port = server_sock.getsockname()[1]
 
         # Setup mock client socket
         client_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(client_sock.close)
+        client_sock.bind(("127.0.0.1", 0))
+        client_sock.settimeout(1)
 
         server_state = ServerState()
 

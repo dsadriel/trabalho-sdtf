@@ -43,6 +43,14 @@ class TestProtocolJSON(unittest.TestCase):
         self.assertEqual(decoded.value, 42)
         self.assertEqual(decoded, msg)
 
+    def test_request_session_survives_roundtrip(self):
+        msg = Message.request(1, 42, session='a' * 32)
+        self.assertEqual(Message.decode(msg.encode()), msg)
+
+    def test_cluster_message_roundtrip(self):
+        msg = Message(MessageType.OP, epoch='test', op=[1, 'a' * 32, 1, 7, 'client', 4000])
+        self.assertEqual(Message.decode(msg.encode()), msg)
+
     def test_request_message_non_positive_value_raises(self):
         with self.assertRaises(ValueError):
             Message.request(id_req=2, value=-15)

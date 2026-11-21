@@ -40,8 +40,9 @@ class ServerInterface:
                 self._thread.join(timeout=2.0)
                 self._thread = None
 
-    def log(self, message: str) -> None:
+    def log(self, *parts) -> None:
         """Enqueues message for asynchronous output or prints synchronously if inactive."""
+        message = " ".join(str(part) for part in parts)
         if self._thread is not None and self._thread.is_alive():
             self._queue.put(message)
         else:
