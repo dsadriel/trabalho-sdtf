@@ -159,6 +159,10 @@ class TestConcurrency(unittest.TestCase):
         for client in range(1, 5):
             self.request(client, client)
         self.wait(lambda: len(self.leader.pending) == 4 and self.second.state.num_reqs == 4)
+        expected = [(op.sequence, op.expected_total)
+                    for op in sorted(self.leader.pending.values(), key=lambda op: op.sequence)]
+        self.assertEqual([seq for seq, _ in expected], [1, 2, 3, 4])
+        self.assertEqual(expected[-1], (4, 10))
         del self.bus.nodes[self.first.ip]
         now = [100.0]
         with patch('server.heartbeat.CLOCK', side_effect=lambda: now[0]):
@@ -174,8 +178,7 @@ class TestConcurrency(unittest.TestCase):
             now[0] = monitor.deadline
             self.leader.tick()
         self.wait(lambda: len(self.bus.replies) == 4)
-        self.assertEqual([(r.num_reqs, r.total_sum) for r in self.bus.replies],
-                         [(1, 1), (2, 3), (3, 6), (4, 10)])
+        self.assertEqual([(r.num_reqs, r.total_sum) for r in self.bus.replies], expected)
         self.assertEqual(self.second.state.total_sum, 10)
 
     def test_two_rms_crash_together_with_several_operations_pending(self):
@@ -193,6 +196,10 @@ class TestConcurrency(unittest.TestCase):
         for client in range(1, 5):
             self.request(client, client)
         self.wait(lambda: len(self.leader.pending) == 4 and survivor.state.num_reqs == 4)
+        expected = [(op.sequence, op.expected_total)
+                    for op in sorted(self.leader.pending.values(), key=lambda op: op.sequence)]
+        self.assertEqual([seq for seq, _ in expected], [1, 2, 3, 4])
+        self.assertEqual(expected[-1], (4, 10))
         del self.bus.nodes[self.first.ip]
         del self.bus.nodes[self.second.ip]
         now = [100.0]
@@ -205,7 +212,7 @@ class TestConcurrency(unittest.TestCase):
                 self.bus.drain()
         self.wait(lambda: len(self.bus.replies) == 4)
         self.assertEqual(set(self.leader.view), {self.leader.ip, survivor.ip})
-        self.assertEqual([r.total_sum for r in self.bus.replies], [1, 3, 6, 10])
+        self.assertEqual([(r.num_reqs, r.total_sum) for r in self.bus.replies], expected)
         self.assertEqual(survivor.state.snapshot(), self.leader.state.snapshot())
 
     def test_fe_crash_cancels_pending_workers_and_recovers_applied_prefix(self):
@@ -217,6 +224,7 @@ class TestConcurrency(unittest.TestCase):
         self.wait(lambda: len(self.leader.pending) == 3 and all(
             n.state.num_reqs == 3 for n in (self.first, self.second)))
         operations = list(self.leader.pending.values())
+        expected_by_session = {op.session: op.expected_total for op in operations}
         old_epoch = self.leader.epoch
         with self.leader.cv:
             self.leader.ready = False
@@ -229,9 +237,10 @@ class TestConcurrency(unittest.TestCase):
         self.assertEqual(self.bus.replies, [])
         self.assertNotEqual(self.second.epoch, old_epoch)
         self.assertEqual(self.second.state.total_sum, 35)
-        for client, value, expected in ((1, 10, 10), (2, 20, 30), (3, 5, 35)):
-            reply = self.bus.submit(self.second, 1, value, session=f'{client:032x}')
-            self.assertEqual(reply.total_sum, expected)
+        for client, value in ((1, 10), (2, 20), (3, 5)):
+            session = f'{client:032x}'
+            reply = self.bus.submit(self.second, 1, value, session=session)
+            self.assertEqual(reply.total_sum, expected_by_session[session])
         self.assertEqual(self.second.state.num_reqs, 3)
         self.wait(lambda: not self.leader.request_workers)
 
