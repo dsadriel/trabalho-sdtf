@@ -1,6 +1,8 @@
 """Independent records for operations waiting for replica confirmations."""
 from dataclasses import dataclass, field
 
+from server.quorum import required
+
 
 @dataclass
 class PendingOperation:
@@ -24,7 +26,11 @@ class PendingOperation:
         return [self.sequence, self.session, self.request_id, self.value, *self.address]
 
     def confirmed(self, view):
-        return self.members.intersection(view).issubset(self.acks)
+        active_participants = self.members.intersection(view)
+        if not active_participants:
+            return False
+        active_acks = self.acks.intersection(active_participants)
+        return len(active_acks) >= required(len(active_participants))
 
     def acknowledge(self, source, epoch, sequence, total, view):
         if (self.cancelled or epoch != self.epoch or sequence != self.sequence

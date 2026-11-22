@@ -93,7 +93,7 @@ def handle_request(sock, addr, msg: Message, state: ServerState,
                     self.interface.log('HISTORY GAP', session, 'requested', msg.id_req,
                                        'last_req', client.last_req, 'seq', state.num_reqs)
                     return
-                if self.join_waiters or len(self.pending) >= MAX_INFLIGHT_OPERATIONS:
+                if self.join_waiters or len(self.view) <= 1 or len(self.pending) >= MAX_INFLIGHT_OPERATIONS:
                     self.cv.wait()
                     continue
                 if not self.pending:

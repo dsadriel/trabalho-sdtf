@@ -83,8 +83,16 @@ def tick(self):
                         for waiting in self.awaiting_ready:
                             recovery.send_snapshot(self, waiting)
                     recovery.finish_sync(self)
-                    self.interface.log('RM timeout', peer, 'members', self.view,
-                                       'quorum', required(len(self.view) - 1))
+                    if len(self.view) <= 1:
+                        waiters = set(self.join_waiters)
+                        self.cancel_work()
+                        self.join_waiters.update(waiters)
+                        recovery.resume_joins(self)
+                        self.interface.log('RM timeout', peer, 'members', self.view,
+                                           'quorum', 'unavailable (0 RMs)')
+                    else:
+                        self.interface.log('RM timeout', peer, 'members', self.view,
+                                           'quorum', required(len(self.view) - 1))
                     with self.cv:
                         self.cv.notify_all()
                     self.announce()

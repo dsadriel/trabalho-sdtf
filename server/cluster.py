@@ -86,6 +86,7 @@ class Node:
             for operation in self.pending.values():
                 operation.cancelled = True
             self.pending.clear()
+            self.request_workers.clear()
             self.buffer.clear()
             self.result_cache.clear()
             self.replica_version += 1

@@ -2,7 +2,7 @@
 
 Serviço de soma de inteiros positivos sobre UDP, desenvolvido para a disciplina INF01085 da UFRGS.
 
-A Parte 2 adapta a implementação da Parte 1: mantém `Message`, `ServerState`, `ServerInterface`, `handle_discovery`, `handle_request` e a interface do cliente. Acrescenta descoberta do coordenador por multicast, replicação ordenada com confirmação de todos os RMs participantes, monitoramento de falhas, eleição em anel e recuperação por snapshot.
+A Parte 2 adapta a implementação da Parte 1: mantém `Message`, `ServerState`, `ServerInterface`, `handle_discovery`, `handle_request` e a interface do cliente. Acrescenta descoberta do coordenador por multicast, replicação ordenada com quórum de maioria simples dos RMs ativos (`(n // 2) + 1`, mínimo 1 RM), monitoramento de falhas, eleição em anel e recuperação por snapshot.
 
 ## Executar
 
@@ -29,7 +29,7 @@ Digite números positivos, um por linha. Para máquinas distintas, omita `--loca
 - `servidor.py` cria `Node`, inicia `ServerInterface` e executa o laço UDP.
 - `Node.handle` chama `handle_discovery`, `handle_request` e `handle_exit`. Os demais tipos são encaminhados aos tratadores `handle_*` de eleição, heartbeat, recuperação e replicação.
 - O FE mantém várias operações pendentes, com registro de resultados e participantes por época/sequência. Retransmissões reutilizam o trabalho existente.
-- `handle_request` aguarda a confirmação de todos os RMs participantes antes de chamar `ServerState.process_request` e responder. Um RM só é retirado dessa espera após três perdas consecutivas de heartbeat; perder apenas RESULT não o remove. As réplicas processam em threads e aplicam operações em ordem usando esse mesmo método. A espera pela rede não mantém um lock global entre pedidos.
+- `handle_request` aguarda a confirmação da maioria simples dos RMs participantes (`(n // 2) + 1`, exigindo pelo menos 1 RM ativo) antes de chamar `ServerState.process_request` e responder. Um RM só é retirado da visão ativa após três perdas consecutivas de heartbeat; se não restar nenhum RM, o FE cancela operações pendentes e aguarda o ingresso de pelo menos uma réplica. As réplicas processam em threads e aplicam operações em ordem usando esse mesmo método. A espera pela rede não mantém um lock global entre pedidos.
 - `ServerState` concentra soma, contador e histórico de clientes; seus snapshots carregam também os dados necessários para detectar duplicatas após eleição.
 - Após uma eleição, o FE coleta e sincroniza o estado dos sobreviventes antes de atender. Geração de liderança e confirmações de snapshot evitam que réplicas continuem presas ao coordenador antigo.
 - Um pedido que revele histórico incompleto recebe `HISTORY_GAP`; o cliente informa o erro e interrompe o envio, sem redescoberta infinita.

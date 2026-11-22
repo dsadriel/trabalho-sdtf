@@ -1,6 +1,8 @@
 def required(replica_count: int) -> int:
-    """Every participating RM still in the view must confirm."""
-    return replica_count
+    """Majority of active RMs; requires at least 1 RM to confirm."""
+    if replica_count <= 0:
+        return 1
+    return (replica_count // 2) + 1
 
 
 def handle_result(self, message, addr):

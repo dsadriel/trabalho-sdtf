@@ -97,10 +97,12 @@ class TestCluster(unittest.TestCase):
             monitor.start(CLOCK() - 1)
             second.tick()
         bus.drain()
-        self.assertEqual(bus.submit(second, 3).total_sum, 21)
+        self.assertEqual(second.view, [second.ip])
         first = bus.add(first.ip)
         first.tick()
         bus.drain()
+        self.assertEqual(first.state.snapshot(), second.state.snapshot())
+        self.assertEqual(bus.submit(second, 3).total_sum, 21)
         self.assertEqual(first.state.snapshot(), second.state.snapshot())
 
     def test_multiple_clients_and_gap_use_original_state_rules(self):
@@ -159,8 +161,8 @@ class TestCluster(unittest.TestCase):
             self.assertEqual(bus.replies[-1].total_sum, 7)
         finally:
             with leader.cv:
-                leader.view = [leader.ip]
-                leader.cv.notify_all()
+                leader.ready = False
+                leader.cancel_work()
 
     def test_follower_ignores_client_requests(self):
         bus = Bus()

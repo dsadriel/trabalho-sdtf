@@ -152,7 +152,7 @@ class TestFailover(unittest.TestCase):
         self.assertEqual(self.b.leader, self.d.ip)
         self.assertEqual(self.b.epoch, self.d.epoch)
 
-    def test_quorum_wait_finishes_when_two_replicas_crash_together(self):
+    def test_quorum_wait_cancels_when_all_replicas_crash_and_resumes_after_rejoin(self):
         self.bus.submit(self.a, 1)
         del self.bus.nodes[self.a.ip]
         self.c.elect()
@@ -174,13 +174,17 @@ class TestFailover(unittest.TestCase):
             self.now = max(self.d.monitor_for(p).deadline for p in (self.b.ip, self.c.ip))
             self.d.tick()
             self.bus.drain()
-        deadline = time.monotonic() + 1
-        while not self.bus.replies and time.monotonic() < deadline:
-            self.bus.drain()
-            time.sleep(0.001)
         self.assertEqual(self.d.view, [self.d.ip])
-        self.assertEqual(self.bus.replies[-1].total_sum, 19)
+        self.assertEqual(self.d.pending, {})
+        self.assertEqual(self.bus.replies, [])
+        self.assertEqual(self.d.state.total_sum, 14)
+        # Rejoining one RM restores quorum and allows client retry to succeed.
+        rejoined = self.bus.add(self.b.ip)
+        rejoined.tick()
+        self.bus.drain()
+        self.assertEqual(self.bus.submit(self.d, 3, 5).total_sum, 19)
         self.assertEqual(self.bus.submit(self.d, 4, 3).total_sum, 22)
+        self.assertEqual(rejoined.state.total_sum, 22)
 
     def test_missing_history_is_reported_without_modifying_sum(self):
         self.d.view = [self.d.ip]
