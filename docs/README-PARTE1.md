@@ -2,7 +2,7 @@
 
 Serviço distribuído cliente-servidor de soma de inteiros sobre UDP puro, com descoberta dinâmica por broadcast e entrega confiável *exactly-once* implementada na camada de aplicação.
 
-- **Especificação:** [INF01151-Trabalho_202601_P1.pdf](docs/INF01151-Trabalho_202601_P1.pdf)
+- **Especificação:** [INF01151-Trabalho_202601_P1.pdf](INF01151-Trabalho_202601_P1.pdf)
 
 ---
 
