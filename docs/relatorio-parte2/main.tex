@@ -12,7 +12,8 @@
 \usepackage{tabularx}
 \usepackage{array}
 \usepackage{enumitem}
-\usepackage{placeins}
+\usepackage[section]{placeins}
+\usepackage{float}
 \usepackage{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
@@ -29,6 +30,7 @@
 \definecolor{sbcbg}{HTML}{F8FAFC}
 
 \sloppy
+\raggedbottom
 
 \title{Relatório Técnico --- Trabalho Prático Parte 2:\\
 Replicação Ativa e Eleição de Líder}
@@ -46,27 +48,27 @@ Nicolas Chin Lee (579322), Vicente Pianezzola (587456)}
 \maketitle
 
 \begin{resumo}
-Este relatório descreve o projeto, a implementação e a validação da Parte 2 do trabalho prático de INF01085. Partindo do serviço de soma sobre UDP da Parte 1, o sistema foi estendido para um cluster tolerante a falhas com separação entre \textit{Front-End} (FE) e \textit{Replica Managers} (RMs), replicação ativa com ordenação total, quórum de maioria simples com mínimo de uma réplica ativa, detecção de falhas por \textit{heartbeats} com \textit{timeout} adaptativo, eleição em anel e recuperação por \textit{snapshot}. Os 105 testes unitários e 5 cenários \textit{end-to-end} com processos reais (1.300.000 requisições) confirmaram 100\% de exatidão da soma acumulada mesmo sob quedas abruptas do líder e de réplicas.
+Este relatório apresenta a extensão do serviço distribuído de soma sobre UDP desenvolvido na Parte 1 de INF01085 para um cluster tolerante a falhas. A arquitetura separa o papel de \textit{Front-End} (FE) e \textit{Replica Managers} (RMs), combinando replicação ativa com ordenação total, quórum de maioria simples, detecção de falhas por \textit{heartbeats} adaptativos, eleição de líder em anel e recuperação de estado via \textit{snapshot}. A validação cobriu 105 testes unitários, 5 cenários \textit{end-to-end} com processos reais (totalizando 1.300.000 requisições sob injeção de falhas) e um teste distribuído em rede local com 4 máquinas, mantendo 100\% de exatidão na soma acumulada.
 \end{resumo}
 
 % ============================================================================
 \section{Visão Geral da Arquitetura}
 % ============================================================================
 
-Na Parte 1 do trabalho, o serviço distribuído de soma de inteiros positivos operava em um modelo cliente--servidor clássico com um único servidor UDP. Na Parte 2, o serviço foi estendido para tolerar tanto a queda de servidores secundários quanto a queda do próprio ponto de contato dos clientes, incorporando replicação ativa, quórum de confirmação, monitoramento por \textit{heartbeats}, eleição de líder em anel e recuperação de estado por \textit{snapshot}.
+Na Parte 1, o serviço operava com um único servidor UDP recebendo requisições diretamente dos clientes. Na Parte 2, o servidor único deu lugar a um cluster capaz de tolerar tanto a queda de réplicas secundárias quanto a queda do próprio nó que atende os clientes.
 
-A comunicação passa a ser dividida em duas camadas desacopladas sobre sockets UDP/IPv4, ilustradas na Figura~\ref{fig:arquitetura}:
+A comunicação sobre sockets UDP/IPv4 foi dividida em duas camadas, mostradas na Figura~\ref{fig:arquitetura}:
 
 \begin{itemize}
-    \item \textbf{Canal Cliente--Servidor:} os clientes localizam dinamicamente o \textit{Front-End} (FE) enviando uma descoberta para o grupo multicast \texttt{239.192.85.2}. Apenas o nó que detém a liderança e já concluiu sua sincronização responde. As requisições de soma e as confirmações trafegam em unicast diretamente entre cliente e FE.
-    \item \textbf{Canal Intra-Cluster:} o FE funciona como sequenciador global e dissemina operações e anúncios periódicos de visão via multicast para os \textit{Replica Managers} (RMs). Cada RM devolve sua soma calculada em unicast ao FE. O monitoramento de disponibilidade, a eleição de líder e a sincronização de estado operam sobre esse mesmo canal.
+    \item \textbf{Canal Cliente--Servidor:} os clientes descobrem o \textit{Front-End} (FE) ativo enviando uma mensagem para o grupo multicast \texttt{239.192.85.2}. Só o líder já sincronizado responde. Depois da descoberta, as requisições de soma e os \texttt{ACK}s seguem em unicast entre cliente e FE.
+    \item \textbf{Canal Intra-Cluster:} o FE atua como sequenciador global, enviando operações e anúncios de visão via multicast para os \textit{Replica Managers} (RMs). Cada RM devolve sua soma em unicast ao FE. Monitoramento, eleição e recuperação de estado trafegam nesse mesmo canal.
 \end{itemize}
 
-Como a especificação não fixa um endereço IP multicast específico, adotou-se \texttt{239.192.85.2} em \texttt{common/config.py}. O bloco \texttt{239.192.0.0/14} é reservado pela RFC~2365 (\S6.1) para escopo organizacional/local (\textit{Organization-Local Scope}), evitando conflito com protocolos padrão em \texttt{224.0.0.x} e impedindo roteamento para fora da rede local. O sufixo \texttt{.85.2} faz referência à disciplina (INF01085, Parte 2).
+Como a especificação não fixa um endereço multicast, escolhemos \texttt{239.192.85.2} em \texttt{common/config.py}. A faixa \texttt{239.192.0.0/14} é reservada pela RFC~2365 (\S6.1) para escopo local, evitando conflitos com protocolos em \texttt{224.0.0.x} e impedindo roteamento externo (o sufixo \texttt{.85.2} referencia INF01085, Parte 2).
 
-\begin{figure}[ht]
+\begin{figure}[!htb]
 \centering
-\resizebox{0.82\textwidth}{!}{%
+\resizebox{0.74\textwidth}{!}{%
 \begin{tikzpicture}[
     font=\sffamily\small,
     box/.style={draw=sbcdark,rounded corners=2.5pt,align=center,line width=0.75pt},
@@ -124,13 +126,13 @@ Como a especificação não fixa um endereço IP multicast específico, adotou-s
 \label{fig:arquitetura}
 \end{figure}
 
-Todas as mensagens trafegam em JSON codificado em UTF-8 por meio da classe \texttt{Message}, definida em \texttt{common/protocol.py}. A Tabela~\ref{tab:protocolo} resume os tipos usados pelo protocolo.
+Todas as mensagens continuam em JSON UTF-8 através da classe \texttt{Message} (\texttt{common/protocol.py}). A Tabela~\ref{tab:protocolo} resume os tipos do protocolo.
 
-\begin{table}[ht]
+\begin{table}[!htb]
 \centering
 \caption{Mensagens do protocolo JSON sobre UDP, agrupadas por função.}
 \label{tab:protocolo}
-\footnotesize
+\scriptsize
 \begin{tabularx}{\textwidth}{l l X}
 \toprule
 \textbf{Mensagem} & \textbf{Direção} & \textbf{Finalidade e Campos Principais} \\
@@ -169,9 +171,9 @@ Todas as mensagens trafegam em JSON codificado em UTF-8 por meio da classe \text
 \section{Ambiente de Testes}
 % ============================================================================
 
-Os testes unitários, os testes de integração em memória, a suíte \textit{end-to-end} com processos reais e o comparativo de desempenho com a Parte 1 foram executados no ambiente descrito na Tabela~\ref{tab:ambiente}.
+A suíte de testes (unitários, integração em memória, E2E com processos reais e comparativo com a Parte 1) rodou no ambiente listado na Tabela~\ref{tab:ambiente}.
 
-\begin{table}[ht]
+\begin{table}[H]
 \centering
 \caption{Configuração de hardware e software do ambiente de testes.}
 \label{tab:ambiente}
@@ -185,35 +187,34 @@ Processador & Apple M4 (10 núcleos) \\
 Memória RAM & 24\,GB \\
 Interpretador Python & Python 3.14.7 \\
 Ambiente Local (\texttt{-{-}local}) & 1 máquina; interface loopback \texttt{lo0} com aliases \texttt{127.0.0.1-4} e multicast \texttt{239.192.85.2} \\
-Ambiente Distribuído (LAN) & 4 máquinas idênticas (3 servidores --- 1 FE e 2 RMs --- e 1 cliente) em rede local, porta UDP \texttt{4000}, multicast \texttt{239.192.85.2} \\
+Ambiente Distribuído (LAN) & 4 máquinas idênticas (3 servidores, sendo 1 FE e 2 RMs, e 1 cliente) em rede local, porta UDP \texttt{4000}, multicast \texttt{239.192.85.2} \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-Para permitir a execução de múltiplos servidores na mesma máquina durante os testes automatizados, os programas \texttt{servidor.py} e \texttt{cliente.py} aceitam a flag opcional \texttt{-{-}local}, que reserva endereços sucessivos de loopback na mesma porta UDP. Além dos testes locais, o sistema também foi validado em \textbf{rede real com 4 máquinas distintas} de mesma configuração (Tabela~\ref{tab:ambiente}), sendo 3 atuando como servidores e 1 como cliente, onde cada servidor identificou automaticamente seu IP pela rota de saída para o grupo multicast \texttt{239.192.85.2}. O mesmo código executa nativamente em ambientes Linux (laboratório do INF-UFRGS) por utilizar apenas sockets UDP Unix padrão.
+Para rodar vários servidores na mesma máquina durante os testes automatizados, \texttt{servidor.py} e \texttt{cliente.py} aceitam a flag \texttt{-{-}local}, que atribui endereços sequenciais de loopback na mesma porta UDP. Também validamos o sistema em rede real com 4 máquinas distintas de mesma configuração, sem usar \texttt{-{-}local}: nesse modo, cada servidor descobre seu próprio IP pela rota de saída até \texttt{239.192.85.2}. Como a implementação usa apenas sockets UDP padrão do Python, o código roda nativamente em Linux (laboratório do INF-UFRGS).
 
-\FloatBarrier
 % ============================================================================
 \section{Algoritmo de Eleição de Líder}
 % ============================================================================
 
-Conforme determinado na especificação da Parte 2, a escolha dinâmica do \textit{Front-End} é realizada pelo \textbf{algoritmo do anel}, implementado no módulo \texttt{server/election.py}. Sobre esse modelo, a equipe definiu um conjunto de mecanismos auxiliares de detecção de falhas, tolerância a quedas concorrentes e sincronização pós-eleição para garantir convergência sobre UDP.
+Seguindo a especificação, a escolha do FE usa o algoritmo do anel (\texttt{server/election.py}). Sobre a versão clássica, adicionamos monitoramento adaptativo, confirmação salto-a-salto e uma barreira de sincronização pós-eleição para lidar com perdas e reordenações do UDP.
 
 \subsection{Detecção de Falhas por Heartbeats Adaptativos}
 
-Durante a operação normal, o FE monitora todos os RMs da visão ativa --- o conjunto de servidores considerados vivos no cluster --- e cada RM monitora o FE em \texttt{server/heartbeat.py}. A cada ciclo, o nó envia um \textit{heartbeat} contendo a época atual (identificador único gerado a cada novo mandato do líder para distinguir mensagens de mandatos distintos) e um identificador aleatório de sondagem, aguardando a resposta correspondente. Em vez de usar um \textit{timeout} fixo que poderia gerar falsos positivos sob carga, a classe \texttt{PeerMonitor} em \texttt{server/timing.py} mede o tempo de ida e volta (RTT) de cada par com relógio monotônico local e mantém uma média móvel exponencial (EWMA, $\alpha = 0{,}125$):
+Durante a operação normal, o FE monitora os RMs da visão ativa e cada RM monitora o FE em \texttt{server/heartbeat.py}. Cada sondagem carrega a época atual (gerada a cada mandato do líder) e um identificador aleatório, aguardando o \texttt{ALIVE} correspondente. Em vez de usar um \textit{timeout} fixo que gera falsos positivos sob carga, \texttt{PeerMonitor} (\texttt{server/timing.py}) mede o RTT de cada par com relógio monotônico e mantém uma média móvel exponencial (EWMA, $\alpha = 0{,}125$):
 \[
     \text{timeout} = \max\bigl(\text{RTT\_MIN},\; 3 \times \overline{\text{RTT}}\bigr),
 \]
-com piso de proteção ao escalonador $\text{RTT\_MIN} = 50\,\text{ms}$ e valor inicial de $100\,\text{ms}$ antes da primeira amostra válida. Somente \textbf{três sondagens consecutivas sem resposta} declaram o par inativo. Respostas atrasadas, duplicadas ou pertencentes a outra época são ignoradas e não zeram o contador de falhas. Além disso, o loop principal de rede em \texttt{server/transport.py} usa \texttt{select.select} com prazo calculado dinamicamente, evitando \textit{polling} fixo.
+com piso $\text{RTT\_MIN} = 50\,\text{ms}$ e estimativa inicial de $100\,\text{ms}$. Um par só é marcado como inativo após três sondagens consecutivas sem resposta; pacotes atrasados, duplicados ou de outra época são descartados sem zerar o contador. O loop de rede em \texttt{server/transport.py} usa \texttt{select.select} com prazo dinâmico para evitar \textit{polling} fixo.
 
-\subsection{Funcionamento do Anel e Tolerância a Falhas Concorrentes}
+\subsection{Funcionamento do Anel e Falhas Concorrentes}
 
-Cada nó tem sua identidade derivada diretamente do endereço IPv4 convertido para um inteiro de 32 bits via \texttt{int(ipaddress.\allowbreak IPv4Address(ip))}. Os membros da visão ativa são ordenados de forma crescente por esse valor, formando um anel lógico unidirecional no qual o nó vivo de maior IP tem precedência.
+A identidade de cada servidor é o seu IPv4 convertido para inteiro de 32 bits via \texttt{int(ipaddress.\allowbreak IPv4Address(ip))}. Os membros vivos são ordenados de forma crescente por esse valor, formando o anel lógico no qual vence o maior IP.
 
-Quando um RM detecta a falha do FE após três \textit{heartbeats} perdidos, ele remove imediatamente o líder antigo da visão, cancela eventuais operações locais pendentes e monta o anel apenas com os RMs restantes (\texttt{ring}), iniciando um token de eleição que carrega esse anel ordenado, a lista de nós visitados (\texttt{path}), o \textit{snapshot} local (soma acumulada, total de requisições, última sequência aplicada e histórico de clientes em JSON), a época antiga e a próxima geração de liderança (contador inteiro monotônico que numera cada eleição).
+Quando um RM perde três \textit{heartbeats} do FE, ele remove o líder antigo da visão, cancela operações locais pendentes e monta o anel apenas com os RMs restantes (\texttt{ring}). Em seguida, inicia um \texttt{TOKEN} carregando \texttt{ring}, a lista de nós visitados (\texttt{path}), seu \textit{snapshot} local (soma, total de requisições, última sequência e histórico de clientes), a época anterior e a próxima geração (\texttt{term}).
 
-Como o monitoramento por \textit{heartbeats} ocorre apenas entre FE e RMs --- e não entre RMs ---, o iniciador já sabe que o líder antigo caiu e o exclui de \texttt{ring}, mas ainda não sabe se outro RM também falhou simultaneamente. Por isso, cada encaminhamento do token no anel exige confirmação salto-a-salto (\texttt{HOP\_ACK}) dentro do \textit{timeout} estimado para aquele sucessor: se o prazo expirar sem resposta, o nó descobre a inatividade daquela réplica, pula-a e repassa o mesmo token ao próximo membro de \texttt{ring}, conforme ilustrado passo a passo na Figura~\ref{fig:anel}. Cada RM vivo que recebe o token confirma o recebimento, adota o mesmo \texttt{ring} (já sem o líder antigo, dispensando testá-lo), acrescenta seu IP a \texttt{path} e atualiza o \textit{snapshot} embutido caso possua uma sequência global maior.
+Como os \textit{heartbeats} só rodam entre FE e RMs, o iniciador sabe que o FE caiu, mas pode não saber se outro RM caiu junto. Por isso, cada passo no anel exige um \texttt{HOP\_ACK} dentro do \textit{timeout} estimado do sucessor. Se não houver resposta, o nó pula o sucessor inativo e repassa o token ao próximo membro de \texttt{ring} (Figura~\ref{fig:anel}). Cada RM vivo que recebe o token confirma o recebimento, adota \texttt{ring}, anexa seu IP em \texttt{path} e substitui o \textit{snapshot} embutido se tiver uma sequência mais avançada.
 
 \begin{figure}[ht]
 \centering
@@ -304,13 +305,13 @@ Como o monitoramento por \textit{heartbeats} ocorre apenas entre FE e RMs --- e 
 \label{fig:anel}
 \end{figure}
 
-Quando o token retorna ao nó que o originou, este escolhe como vencedor o nó de maior IP presente no caminho percorrido e envia a notificação de vitória. Caso esse pacote se perca na rede, o prazo global da eleição expira e inicia automaticamente uma nova rodada.
+Quando o token volta ao iniciador, ele seleciona o maior IP presente em \texttt{path} e envia \texttt{WIN}. Se esse pacote se perder, o prazo global da eleição estoura e uma nova rodada começa automaticamente.
 
-\subsection{Promoção, Barreira de Sincronização e Redescoberta no Cliente}
+\subsection{Promoção, Sincronização e Redescoberta no Cliente}
 
-Ao receber a notificação de vitória (ou ao constatar que é o único sobrevivente), o vencedor incrementa a geração de liderança, gera uma nova época única e entra na barreira de sincronização, ainda sem responder clientes. Ele anuncia a nova visão, aguarda o relato de estado de todos os sobreviventes conhecidos, seleciona a maior sequência global existente, distribui o \textit{snapshot} consolidado e espera a confirmação de prontidão de cada réplica. Só então passa a atender requisições (Figura~\ref{fig:estados}).
+Ao receber \texttt{WIN} (ou se for o único sobrevivente), o vencedor incrementa \texttt{term}, cria uma nova época e entra no estado \texttt{Synchronizing}, ainda sem responder clientes. Ele anuncia a nova visão, recolhe o estado dos sobreviventes via \texttt{JOIN}, escolhe o \textit{snapshot} de maior sequência global e o distribui via \texttt{SNAP}. Só depois de receber \texttt{READY} das réplicas é que passa a atender requisições (Figura~\ref{fig:estados}).
 
-O par geração e IP estabelece uma ordem total de precedência de liderança: qualquer anúncio ou \textit{snapshot} de um líder antigo possui precedência inferior e é descartado, impedindo que um coordenador obsoleto reverta a transição. Nos clientes, um \textit{timeout} de \texttt{0,5\,s} aguardando confirmação dispara automaticamente uma nova descoberta por multicast. Assim que o novo FE responde, o cliente retransmite a requisição pendente com o mesmo identificador de sessão (um UUID único gerado por instância do cliente para preservar semântica \textit{exactly-once} mesmo após troca de líder) e o mesmo número de pedido, retomando o serviço de forma transparente.
+O par (\texttt{term}, IP) define precedência total: mensagens de um líder antigo têm precedência menor e são ignoradas. Do lado do cliente, um \textit{timeout} de \texttt{0,5\,s} esperando \texttt{ACK} dispara uma nova descoberta multicast. Assim que o novo FE responde, o cliente reenvia a requisição pendente com o mesmo \texttt{id\_req} e o mesmo UUID de sessão (criado por execução para manter semântica \textit{exactly-once} após a troca de líder).
 
 \begin{figure}[ht]
 \centering
@@ -347,39 +348,39 @@ O par geração e IP estabelece uma ordem total de precedência de liderança: q
 \label{fig:estados}
 \end{figure}
 
-\paragraph{Justificativa das decisões sobre o anel:} Embora o algoritmo do anel tenha sido estabelecido pela especificação, a implementação precisou resolver limitações clássicas do modelo puro sobre UDP: a confirmação salto-a-salto evita bloqueio quando dois nós caem próximos no anel; o uso de RTT adaptativo reduz falsos positivos em redes congestionadas; e a barreira de sincronização com controle de geração e época garante que nenhuma operação confirmada antes da falha seja sobrescrita por uma réplica defasada.
+O algoritmo do anel foi definido pela especificação, mas precisou dessas adaptações para funcionar de forma confiável sobre UDP: o \texttt{HOP\_ACK} evita que a eleição trave se dois nós caírem juntos, o RTT adaptativo evita falsos positivos quando a rede oscila e a barreira com \texttt{term} e época impede que uma réplica defasada sobrescreva somas já confirmadas.
 
 % ============================================================================
 \section{Replicação Ativa, Ordenação Total e Quórum}
 % ============================================================================
 
-O serviço adota o modelo de \textbf{replicação ativa}: cada RM mantém sua própria instância de \texttt{ServerState} e executa cada soma de forma independente e determinística. O nó eleito como FE deixa de integrar o conjunto de réplicas ativas e atua exclusivamente como sequenciador global e ponto de contato dos clientes.
+O cluster usa replicação ativa: cada RM mantém sua instância de \texttt{ServerState} e executa as somas de forma independente e determinística. Enquanto estiver como FE, o líder não atua como réplica e fica responsável apenas por sequenciar operações e responder aos clientes.
 
-\subsection{Sequenciamento e Pipeline Concorrente no Front-End}
+\subsection{Sequenciamento e Pipeline no Front-End}
 
-Ao receber uma requisição em \texttt{server/processing.py}, o FE verifica se já existe uma tarefa em andamento para aquela combinação de época, sessão e número de pedido. Em caso positivo, trata-se de uma retransmissão UDP e o endereço do remetente é acoplado à tarefa existente, sem alocar nova sequência nem criar nova thread. Para requisições novas, uma thread dedicada é criada, limitada por uma janela máxima de 64 operações em trânsito para evitar criação ilimitada de threads sob sobrecarga.
+Ao receber um \texttt{REQUEST} em \texttt{server/processing.py}, o FE confere se já existe um worker ativo para aquela tupla (época, sessão, \texttt{id\_req}). Se houver, trata-se de retransmissão UDP e o endereço do cliente é apenas anexado à tarefa existente. Caso contrário, uma nova thread é criada, respeitando o limite de 64 operações em trânsito para não criar threads sem controle sob carga alta.
 
-Sob a variável de condição do nó, a thread verifica em ordem: se o pedido é uma duplicata já confirmada, devolvendo a resposta anterior; se há um pedido anterior da mesma sessão ainda em andamento, aguardando sua conclusão para preservar a ordem daquele cliente; se houve uma lacuna na numeração da sessão, reportando erro de histórico incompleto sem alterar a soma; e se há pelo menos um RM ativo na visão sem ingresso pendente de novas réplicas.
+Sob a variável de condição do nó, a thread faz quatro checagens antes de aceitar a soma: se o pedido é duplicado, reenvia o \texttt{ACK} anterior; se há um pedido anterior da mesma sessão em aberto, aguarda ele terminar; se houve pulo na numeração da sessão, devolve \texttt{HISTORY\_GAP}; e, se não houver RM ativo ou houver ingresso em andamento, espera a condição ser satisfeita.
 
-Admitida a requisição, o FE reserva o próximo número de sequência global (inteiro monotônico que impõe a mesma ordem total de execução em todos os RMs), calcula a soma acumulada esperada e cria um registro \texttt{PendingOperation} com o conjunto de RMs participantes daquele instante. A operação é disseminada em multicast e retransmitida a cada \texttt{0,2\,s} enquanto não atingir quórum. Durante a espera pelas respostas dos RMs, o \textit{lock} é liberado, permitindo que operações de outros clientes avancem concorrentemente.
+Admitida a requisição, o FE atribui o próximo número de sequência global (\texttt{seq}), calcula a soma esperada e cria uma \texttt{PendingOperation} com os RMs participantes. A operação sai em multicast e é retransmitida a cada \texttt{0,2\,s} até atingir quórum. O \textit{lock} é liberado durante a espera pelas réplicas, permitindo que outros clientes avancem em paralelo.
 
-\subsection{Ordenação Total e Cache de Resultados nos RMs}
+\subsection{Ordenação Total e Cache nos RMs}
 
-Em cada RM, o recebimento de uma operação em \texttt{server/replication.py} cria uma thread por sequência única ainda não aplicada e a registra no buffer local. Como datagramas UDP podem chegar fora de ordem, cada thread aguarda na variável de condição até que sua sequência seja exatamente a próxima esperada pelo acumulador local. Apenas nessa condição ela executa \texttt{process\_request()}, atualizando a soma em ordem estritamente total, e devolve o resultado em unicast ao FE.
+Em \texttt{server/replication.py}, cada operação nova recebida por um RM ganha uma thread própria e entra no buffer local. Como o UDP pode reordenar pacotes, cada thread espera na variável de condição até que sua \texttt{seq} seja exatamente a próxima esperada pelo acumulador. Só então executa \texttt{process\_request()} e envia o \texttt{RESULT} em unicast ao FE.
 
-Para lidar com perda de pacotes de resposta, cada RM guarda o resultado calculado em um cache temporário indexado por sequência. Se o FE retransmitir uma operação já aplicada pelo RM, o resultado em cache é reenviado imediatamente. O cache é limpo progressivamente conforme o FE divulga o prefixo global já confirmado --- a maior sequência contínua que já atingiu quórum e foi efetivada no estado do FE --- nos pacotes seguintes e nos anúncios de visão. Cada worker também valida a época e a versão local do estado antes de gravar, impedindo que threads antigas corrompam um \textit{snapshot} recém-instalado.
+Se o \texttt{RESULT} se perder na rede e o FE retransmitir a operação, o RM não recalcula nada: ele mantém um cache indexado por \texttt{seq} e reenvia a resposta guardada. Esse cache é limpo aos poucos conforme o FE divulga o prefixo global já confirmado (a maior sequência contínua efetivada) nas mensagens \texttt{OP} e \texttt{VIEW}. Antes de gravar, cada worker também confere a época e a versão local do estado para não interferir em um \textit{snapshot} recém-instalado.
 
-\subsection{Quórum de Maioria Simples e Bloqueio sem Réplicas}
+\subsection{Quórum de Maioria Simples}
 
-A confirmação no FE segue a política de \textbf{maioria simples dos RMs participantes ativos}, implementada em \texttt{server/quorum.py} e \texttt{server/operations.py}:
+A confirmação no FE segue maioria simples dos RMs ativos participantes (\texttt{server/quorum.py} e \texttt{server/operations.py}):
 \[
     \text{quórum}(n) =
     \begin{cases}
-        1 \text{ (inatingível --- bloqueado)}, & \text{se } n = 0,\\
+        1 \text{ (inatingível, bloqueado)}, & \text{se } n = 0,\\
         \lfloor n / 2 \rfloor + 1, & \text{se } n \ge 1.
     \end{cases}
 \]
-Com 3 RMs ativos, o quórum é 2; com 2 RMs, é 2; com 1 RM, é 1; e com 0 RMs o FE bloqueia confirmações até o ingresso de pelo menos uma réplica. A operação só altera o \texttt{ServerState} do FE e responde ao cliente quando atinge o quórum \emph{e} corresponde à próxima sequência do prefixo, conforme mostra a Figura~\ref{fig:sequencia}.
+Assim, com 3 RMs o quórum é 2; com 2 RMs é 2; com 1 RM é 1; e com 0 RMs o FE bloqueia confirmações até alguma réplica ingressar. Uma operação só atualiza o \texttt{ServerState} do FE e gera o \texttt{ACK} quando atinge quórum \emph{e} é a próxima sequência do prefixo (Figura~\ref{fig:sequencia}).
 
 \begin{figure}[ht]
 \centering
@@ -437,48 +438,43 @@ Com 3 RMs ativos, o quórum é 2; com 2 RMs, é 2; com 1 RM, é 1; e com 0 RMs o
 \label{fig:sequencia}
 \end{figure}
 
-Com essa regra, um RM lento ou que sofre perda de pacote não atrasa a resposta ao cliente: ao receber o anúncio periódico de visão com uma sequência maior que a sua, o RM atrasado solicita sincronização e se atualiza com o \textit{snapshot} do FE. Por outro lado, o ingresso de um RM novo pausa temporariamente novas admissões, espera o esvaziamento das operações em andamento, transfere o \textit{snapshot} confirmado e só então o incorpora à visão ativa.
+Com maioria simples, um RM lento ou que perde um pacote não trava a resposta ao cliente. Quando recebe o próximo \texttt{VIEW} com uma sequência maior que a sua, a réplica atrasada pede ressincronização e recebe o \textit{snapshot} do FE. Já quando um RM novo entra no cluster, o FE pausa novas admissões por um instante, espera drenar as operações em trânsito, envia o \textit{snapshot} e só então o inclui na visão ativa.
 
-\subsection{Desafios Enfrentados na Replicação Ativa}
+\subsection{Desafios Enfrentados}
 
-O principal desafio foi conciliar \textbf{paralelismo entre clientes} com \textbf{ordenação total sem bloqueio global de rede}. Manter um único \textit{lock} durante a espera pelas respostas dos RMs serializaria todas as requisições e derrubaria a vazão; por outro lado, liberar o \textit{lock} exige separar o estado especulativo em trânsito do estado já confirmado em \texttt{ServerState} e garantir que a confirmação da sequência $k$ nunca seja enviada antes da confirmação da sequência $k - 1$. Outro desafio foi preservar a semântica \textit{exactly-once} após a queda do FE: sem um identificador de sessão por cliente e sem incluir o histórico de clientes no \textit{snapshot}, uma retentativa cuja resposta se perdeu na queda do líder antigo seria somada uma segunda vez no novo líder.
+O ponto mais trabalhoso foi manter paralelismo entre clientes sem quebrar a ordenação total. Segurar o \textit{lock} enquanto espera os RMs responderem serializaria tudo e derrubaria a vazão; liberar o \textit{lock}, por outro lado, obrigou a separar o estado das operações em trânsito do estado confirmado em \texttt{ServerState}, garantindo que a sequência $k$ nunca seja confirmada antes de $k - 1$. Outro cuidado importante foi preservar \textit{exactly-once} durante uma troca de líder: sem um UUID de sessão salvo no \textit{snapshot}, um cliente cujo \texttt{ACK} se perdeu na queda do FE antigo acabaria somando o mesmo valor duas vezes no novo líder.
 
 % ============================================================================
 \section{Problemas Encontrados e Soluções}
 % ============================================================================
 
-Durante o desenvolvimento e a validação experimental, cinco problemas concretos foram identificados e tratados:
+\subsection{Deadlock no reingresso quando todos os RMs caem}
 
-\begin{enumerate}
-    \item \textbf{Deadlock na barreira de ingresso quando todos os RMs caem:}
-    Ao adotar o requisito de no mínimo 1 RM ativo, percebeu-se que, se o último RM caísse enquanto existia uma operação pendente, essa operação nunca atingiria quórum e impediria indefinidamente o ingresso de qualquer RM que retornasse, pois a barreira só admite novos membros quando não há operações em andamento.
-    \textit{Solução:} novas requisições passaram a aguardar na variável de condição enquanto não houver RMs ativos, sem entrar na fila de pendências; além disso, quando a queda de um RM deixa o FE sozinho, as operações pendentes não confirmadas são canceladas, preservando os nós que aguardavam ingresso para que sejam sincronizados imediatamente.
+Quando implementamos o requisito de no mínimo um RM ativo, apareceu um bloqueio difícil de notar no início: se o último RM caísse com uma operação ainda em andamento, essa operação nunca atingiria quórum e impedia o ingresso de qualquer RM que voltasse depois, porque a barreira de ingresso exige a fila de pendências vazia. Para corrigir, requisições novas passaram a esperar na variável de condição enquanto não há RMs ativos (sem criar pendência). Além disso, quando a queda do último RM deixa o FE sozinho, as operações não confirmadas são canceladas, liberando o ingresso e a sincronização imediata das réplicas que retornam.
 
-    \item \textbf{Condição de corrida em retentativas na mesma época:}
-    Nos testes de queda total de RMs seguida de reingresso, o cliente reenviava a requisição antes que a thread da tentativa cancelada executasse o bloco \texttt{finally} para remover seu registro da tabela de workers ativos. Como o líder e a época não haviam mudado, o servidor associava o reenvio à tarefa já cancelada e a requisição travava.
-    \textit{Solução:} a rotina de cancelamento em \texttt{server/cluster.py} passou a limpar imediatamente o mapa de workers sob o mesmo \textit{lock}, enquanto o bloco \texttt{finally} em \texttt{server/processing.py} mantém a verificação por identidade da tarefa para evitar remover um worker novo.
+\subsection{Condição de corrida em retentativas na mesma época}
 
-    \item \textbf{Latência de cauda com quórum de unanimidade:}
-    A primeira versão da Parte 2 exigia confirmação de 100\% dos RMs participantes. Embora simples, esse modelo fazia qualquer perda isolada de resposta ou atraso em uma única réplica segurar a confirmação ao cliente até a retransmissão ou até três falhas de \textit{heartbeat}.
-    \textit{Solução:} alterou-se a política em \texttt{server/quorum.py} e \texttt{server/operations.py} para maioria simples ($\lfloor n/2 \rfloor + 1$, mínimo 1 RM), mantendo a ressincronização automática de réplicas atrasadas via \textit{snapshot}.
+Nos testes de queda total dos RMs seguida de reingresso, o cliente às vezes reenviava o pacote antes que a thread da tentativa cancelada executasse o bloco \texttt{finally} para se remover do mapa de workers ativos. Como o FE e a época eram os mesmos, o reenvio caía na tarefa já cancelada e travava. A correção foi limpar o mapa de workers imediatamente na rotina de cancelamento (\texttt{server/cluster.py}), sob o mesmo \textit{lock}, mantendo no \texttt{finally} (\texttt{server/processing.py}) a checagem por identidade da tarefa para não apagar um worker novo.
 
-    \item \textbf{Testes concorrentes intermitentes (\textit{flaky}):}
-    Três testes em \texttt{tests/test\_concurrency.py} disparavam clientes distintos em paralelo e comparavam as somas parciais com uma lista fixa \texttt{[1, 3, 6, 10]}. Dependendo da ordem em que o escalonador do SO entregava o \textit{lock} às threads, as somas intermediárias variavam embora a soma final e a consistência estivessem corretas.
-    \textit{Solução:} os testes foram corrigidos para capturar a ordem efetivamente atribuída pelo sequenciador, verificando confirmação estrita em ordem de prefixo e igualdade de estado entre FE e RMs.
+\subsection{Latência de cauda com quórum de unanimidade}
 
-    \item \textbf{Particularidades de sockets entre sistemas operacionais e limitações conhecidas:}
-    No macOS, o modo \texttt{-{-}local} exige aliases explícitos na interface \texttt{lo0} (\texttt{sudo ifconfig lo0 alias 127.0.0.2 up}, etc.), enquanto no Linux toda a faixa \texttt{127.0.0.0/8} funciona nativamente; no Windows, o socket multicast requer \texttt{bind} no endereço curinga (string vazia) antes de \texttt{IP\_ADD\_MEMBERSHIP}. Essas diferenças foram tratadas em \texttt{server/transport.py}. Como limitações conhecidas não resolvidas neste escopo, destacam-se: (i) o \textit{snapshot} trafega em um único datagrama JSON/UDP (limite de 65.507 bytes, podendo exceder o MTU se milhares de sessões distintas acumularem sem descarte); (ii) não há persistência em disco caso todas as máquinas caiam simultaneamente; e (iii) o protocolo assume rede local conectada, sem tolerância a partições de rede.
-\end{enumerate}
+A primeira versão exigia confirmação de 100\% dos RMs participantes. Na prática, qualquer pacote perdido ou atraso pontual em uma única réplica segurava o \texttt{ACK} até a retransmissão ou até o RM falhar três \textit{heartbeats}. Mudar a regra em \texttt{server/quorum.py} e \texttt{server/operations.py} para maioria simples ($\lfloor n/2 \rfloor + 1$, mínimo 1 RM) eliminou esse gargalo, deixando a recuperação de réplicas atrasadas a cargo do \textit{snapshot}.
+
+\subsection{Diferenças de sockets entre SOs e limitações conhecidas}
+
+Em \texttt{server/transport.py}, foi preciso lidar com diferenças entre sistemas operacionais: no macOS, o modo \texttt{-{-}local} exige aliases na interface \texttt{lo0} (\texttt{sudo ifconfig lo0 alias 127.0.0.2 up}, etc.), enquanto no Linux toda a faixa \texttt{127.0.0.0/8} funciona direto; no Windows, o socket multicast exige \texttt{bind} na string vazia antes de \texttt{IP\_ADD\_MEMBERSHIP}.
+
+Ficam como limitações conhecidas fora do escopo atual: o \textit{snapshot} é enviado em um único datagrama JSON/UDP (limite de 65.507 bytes, o que pode estourar caso se acumulem milhares de sessões distintas sem limpeza); não há persistência em disco se todos os nós caírem ao mesmo tempo; e o protocolo assume rede local sem partições.
 
 % ============================================================================
 \section{Avaliação Experimental}
 % ============================================================================
 
-A validação foi conduzida em dois níveis: uma suíte de testes unitários e de integração em memória, executada via \texttt{unittest}, e uma suíte \textit{end-to-end} com processos reais em \texttt{scripts/e2e\_local.py}. Na suíte unitária, todos os \textbf{105 testes} (distribuídos em 12 arquivos cobrindo protocolo, estado, cliente, RTT/heartbeat, concorrência, quórum de maioria, eleição e recuperação) passaram em $1{,}4\,\text{s}$.
+A validação foi feita em duas frentes: uma suíte de 105 testes unitários e de integração em memória (12 arquivos executados via \texttt{unittest}, concluídos em $1{,}4\,\text{s}$) e uma suíte E2E com processos reais em \texttt{scripts/e2e\_local.py}.
 
-Na suíte E2E real, foram executados 5 cenários completos sobre UDP e multicast locais com 100.000 requisições por cliente (3 clientes concorrentes nos cenários 1 a 4 e 1 cliente no cenário 5, somando \textbf{1.300.000 requisições reais}), injetando quedas abruptas com \texttt{SIGKILL}. Os resultados estão na Tabela~\ref{tab:e2e}.
+Na suíte E2E local, rodamos 5 cenários sobre UDP e multicast com 100.000 requisições por cliente (3 clientes nos cenários 1 a 4 e 1 cliente no cenário 5, totalizando 1.300.000 requisições) e injeção de quedas abruptas via \texttt{SIGKILL}. A Tabela~\ref{tab:e2e} traz os números observados.
 
-\begin{table}[ht]
+\begin{table}[H]
 \centering
 \caption{Resultados da validação E2E com processos reais (Apple M4, Python 3.14.7).}
 \label{tab:e2e}
@@ -496,13 +492,13 @@ Na suíte E2E real, foram executados 5 cenários completos sobre UDP e multicast
 \end{tabularx}
 \end{table}
 
-Em todos os cenários, o contador global e a soma acumulada fecharam com 100\% de exatidão e código de saída zero nos clientes. Para mensurar o custo da tolerância a falhas, executou-se a mesma carga de 300.000 requisições (3 clientes $\times$ 100.000) sobre a versão da Parte 1 na mesma máquina (Tabela~\ref{tab:comparativo}).
+Em todos os cenários, o contador global e a soma acumulada fecharam exatos e todos os clientes encerraram com código de saída zero. Para medir o custo da replicação, rodamos a mesma carga de 300.000 requisições na versão da Parte 1 na mesma máquina (Tabela~\ref{tab:comparativo}).
 
-\begin{table}[ht]
+\begin{table}[H]
 \centering
 \caption{Comparativo de desempenho entre Parte 1 e Parte 2 (300.000 requisições, 3 clientes).}
 \label{tab:comparativo}
-\small
+\footnotesize
 \begin{tabular}{l c c c}
 \toprule
 \textbf{Versão} & \textbf{Topologia} & \textbf{Tempo Total} & \textbf{Vazão Média} \\
@@ -513,9 +509,9 @@ Parte 2 (replicação ativa + quórum) & 1 FE + 3 RMs + 3 clientes & 79,70\,s & 
 \end{tabular}
 \end{table}
 
-O \textit{overhead} aproximado de $7{,}4\times$ decorre do salto adicional de rede por requisição (FE $\rightarrow$ multicast RMs $\rightarrow$ quórum de respostas), da criação de threads por requisição no FE e por operação em cada RM, da serialização JSON e da contenção de CPU entre os 7 processos competindo na mesma máquina local.
+A diferença de aproximadamente $7{,}4\times$ na vazão era esperada: cada requisição agora passa por um salto extra de rede (multicast do FE e espera pelo quórum dos RMs), dispara threads no FE e nos RMs, serializa JSON extra e disputa CPU entre 7 processos na mesma máquina.
 
-Por fim, o sistema foi validado em \textbf{ambiente distribuído real com 4 máquinas} (Tabela~\ref{tab:ambiente}: 1 FE em \texttt{10.41.40.105}, 2 RMs e 1 cliente em rede local sem \texttt{-{-}local}, porta \texttt{4000}). Nesse experimento, um cliente enviou 10.000 requisições sequenciais (soma esperada de \texttt{258.899}) sobre um cluster que já possuía estado acumulado anterior, concluindo em \textbf{16,7\,s} com vazão estável de \textbf{600 req/s} ($\approx 1{,}67\,\text{ms}$ de latência média ponta-a-ponta incluindo replicação multicast e quórum), código de saída zero e delta exato (\texttt{258.899/258.899}). A Figura~\ref{fig:vazao} sintetiza visualmente a vazão obtida nos diferentes cenários avaliados.
+Também fizemos um teste em rede local real com 4 máquinas (1 FE em \texttt{10.41.40.105}, 2 RMs e 1 cliente, porta \texttt{4000}, sem \texttt{-{-}local}). O cliente enviou 10.000 requisições sequenciais (delta esperado de \texttt{258.899}) sobre um cluster que já tinha estado acumulado. O envio terminou em 16,7\,s a 600 req/s ($\approx 1{,}67\,\text{ms}$ de latência média ponta-a-ponta, incluindo replicação e quórum), com código zero e delta exato (\texttt{258.899/258.899}). A Figura~\ref{fig:vazao} reúne a vazão de todos os experimentos.
 
 \begin{figure}[ht]
 \centering
@@ -572,52 +568,52 @@ Por fim, o sistema foi validado em \textbf{ambiente distribuído real com 4 máq
 
 \subsection{Evolução Arquitetural e Refatoração (Parte 1 $\rightarrow$ Parte 2)}
 
-A refatoração preservou os módulos de interface do cliente e do servidor, a classe unificada \texttt{Message} e o encapsulamento de estado em \texttt{ServerState}, evitando reescrever o que já funcionava na Parte 1. A Tabela~\ref{tab:evolucao} mapeia cada módulo alterado ou adicionado e como essas mudanças viabilizaram a replicação ativa e o anel lógico.
+Mantivemos as interfaces de cliente e servidor, a classe \texttt{Message} e o encapsulamento de \texttt{ServerState} da Parte 1, adicionando os módulos de coordenação do cluster sobre essa base. A Tabela~\ref{tab:evolucao} detalha o que mudou em cada arquivo e o papel dos novos módulos.
 
-\begin{table}[ht]
+\begin{table}[H]
 \centering
 \caption{Mapeamento explícito da refatoração da Parte 1 para a Parte 2.}
 \label{tab:evolucao}
-\footnotesize
+\scriptsize
 \begin{tabularx}{\textwidth}{l l X}
 \toprule
 \textbf{Módulo} & \textbf{Situação} & \textbf{Alterações e Papel na Parte 2} \\
 \midrule
-\texttt{common/config.py} & Modificado & Adição do grupo multicast, parâmetros de RTT/EWMA, limite de falhas de \textit{heartbeat}, janela máxima e intervalo de retransmissão. \\
-\texttt{common/protocol.py} & Modificado & Inclusão das mensagens intra-cluster e do campo de sessão (UUID) nas requisições para preservar idempotência após failover. \\
+\texttt{common/config.py} & Modificado & Grupo multicast, parâmetros de RTT/EWMA, limite de falhas de \textit{heartbeat}, janela máxima e intervalo de retransmissão. \\
+\texttt{common/protocol.py} & Modificado & Mensagens intra-cluster e campo de sessão (UUID) nas requisições para manter idempotência após failover. \\
 \texttt{client/discovery.py} & Modificado & Troca de broadcast por multicast (\texttt{239.192.85.2}), respondido apenas pelo líder ativo. \\
-\texttt{client/processing.py} & Modificado & Redescoberta automática do FE em \textit{timeout} mantendo a identidade da sessão e tratamento explícito de lacuna de histórico. \\
-\texttt{client/interface.py} & Modificado & Geração de sessão UUID por execução e atualização dinâmica do endereço do líder após failover. \\
-\texttt{server/state.py} & Modificado & Chaveamento de clientes por sessão e métodos \texttt{snapshot()}/\texttt{restore()} serializáveis em JSON. \\
-\texttt{server/processing.py} & Refatorado & Substituição do processamento direto por \textit{pipeline} concorrente no FE com retransmissão de operações e confirmação ordenada após quórum. \\
-\texttt{servidor.py} & Refatorado & Reduzido à inicialização de \texttt{Node} e \texttt{ServerInterface}, delegando o loop UDP a \texttt{node.run()}. \\
-\texttt{server/cluster.py} & Novo & Classe \texttt{Node} que coordena papéis (FE/RM), geração, época, visão ativa, variável de condição e despacho de mensagens. \\
-\texttt{server/transport.py} & Novo & Sockets UDP unicast e multicast e loop único sobre \texttt{select.select} com \textit{timeout} dinâmico. \\
+\texttt{client/processing.py} & Modificado & Redescoberta automática do FE em \textit{timeout} mantendo a sessão e tratamento de \texttt{HISTORY\_GAP}. \\
+\texttt{client/interface.py} & Modificado & Geração de sessão UUID por execução e atualização do endereço do líder após failover. \\
+\texttt{server/state.py} & Modificado & Chaveamento de clientes por sessão e métodos \texttt{snapshot()}/\texttt{restore()} em JSON. \\
+\texttt{server/processing.py} & Refatorado & Pipeline concorrente no FE com retransmissão de operações e confirmação ordenada após quórum. \\
+\texttt{servidor.py} & Refatorado & Inicializa \texttt{Node} e \texttt{ServerInterface}, delegando o loop UDP a \texttt{node.run()}. \\
+\texttt{server/cluster.py} & Novo & Classe \texttt{Node} gerenciando papéis (FE/RM), geração, época, visão ativa e despacho de mensagens. \\
+\texttt{server/transport.py} & Novo & Sockets UDP unicast/multicast e loop único sobre \texttt{select.select} com \textit{timeout} dinâmico. \\
 \texttt{server/operations.py} & Novo & Registro \texttt{PendingOperation} por sequência, controlando participantes, confirmações e cancelamento. \\
-\texttt{server/quorum.py} & Novo & Regra de maioria simples ($\lfloor n/2 \rfloor + 1$, mínimo 1 RM) e contabilização de respostas dos RMs. \\
-\texttt{server/replication.py} & Novo & Aplicação ordenada nos RMs com threads, buffer local, controle de versão do estado e cache de respostas. \\
-\texttt{server/timing.py}, \texttt{heartbeat.py} & Novo & \texttt{PeerMonitor} (RTT via EWMA), sondagem bilateral, detecção após 3 perdas e difusão periódica de visão. \\
-\texttt{server/election.py} & Novo & Algoritmo do anel por maior IPv4 com confirmação salto-a-salto, salto sobre nós inativos e anúncio do vencedor. \\
-\texttt{server/recovery.py} & Novo & Barreira de sincronização pós-eleição e drenagem de \textit{pipeline} para ingresso seguro de novos RMs. \\
+\texttt{server/quorum.py} & Novo & Regra de maioria simples ($\lfloor n/2 \rfloor + 1$, mínimo 1 RM) e contagem de respostas dos RMs. \\
+\texttt{server/replication.py} & Novo & Aplicação ordenada nos RMs com threads, buffer local, controle de versão e cache de respostas. \\
+\texttt{server/timing.py}, \texttt{heartbeat.py} & Novo & \texttt{PeerMonitor} (RTT via EWMA), sondagem bilateral, detecção após 3 perdas e difusão de visão. \\
+\texttt{server/election.py} & Novo & Algoritmo do anel por maior IPv4 com \texttt{HOP\_ACK}, salto sobre nós inativos e anúncio do vencedor. \\
+\texttt{server/recovery.py} & Novo & Barreira de sincronização pós-eleição e drenagem do pipeline para ingresso seguro de novos RMs. \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 \subsection{Registro do Uso de Ferramentas de Inteligência Artificial}
 
-Ferramentas de IA generativa (Antigravity/Gemini e Codex) foram utilizadas exclusivamente como suporte ao desenvolvimento, seguindo as diretrizes de integridade acadêmica registradas em \texttt{.agents/agents.md} e o histórico de sessões em \texttt{.agents/ai-sessions.md}. Todo código, teste ou texto sugerido foi revisado e validado empiricamente pela equipe antes de ser incorporado ao repositório. As áreas de emprego foram:
+Ferramentas de IA generativa (Antigravity/Gemini e Codex) foram usadas como apoio durante o desenvolvimento, seguindo as regras de \texttt{.agents/agents.md} e com registro das sessões em \texttt{.agents/ai-sessions.md}. Todo código, teste ou trecho de texto sugerido foi revisado e testado pela equipe antes de entrar no repositório. O uso se concentrou em três frentes:
 
 \begin{itemize}
-    \item \textbf{Especificação e documentação:} extração de requisitos do PDF oficial da Parte 2, organização de \texttt{README.md}, estruturação dos arquivos em \texttt{.agents/} e apoio na formatação \LaTeX{} e nos diagramas TikZ deste relatório.
-    \item \textbf{Arquitetura e codificação:} apoio na refatoração da Parte 1 para os novos módulos de cluster, na migração da política de quórum de unanimidade para maioria simples com mínimo de 1 RM e na depuração da condição de corrida no cancelamento de workers.
-    \item \textbf{Testes automatizados:} criação da suíte unitária e de integração em memória, correção de \textit{flakiness} em \texttt{tests/test\_concurrency.py} e implementação da suíte E2E local com processos reais em \texttt{scripts/e2e\_local.py}.
+    \item \textbf{Documentação e requisitos:} levantamento dos itens da especificação da Parte 2, atualização do \texttt{README.md}, organização dos arquivos em \texttt{.agents/} e apoio na formatação \LaTeX{} e nos diagramas TikZ do relatório.
+    \item \textbf{Codificação e depuração:} suporte na refatoração da Parte 1 para os módulos de cluster, na troca do quórum de unanimidade para maioria simples e na investigação da condição de corrida ao cancelar workers.
+    \item \textbf{Testes automatizados:} escrita da suíte unitária e de integração em memória e criação do script E2E em \texttt{scripts/e2e\_local.py}.
 \end{itemize}
 
 \subsection{Divisão de Responsabilidades e Atribuições da Equipe}
 
-A Tabela~\ref{tab:equipe} registra a divisão formal de responsabilidades entre os integrantes do grupo nos componentes entregues na Parte 2.
+A Tabela~\ref{tab:equipe} registra as responsabilidades de cada integrante na Parte 2.
 
-\begin{table}[ht]
+\begin{table}[H]
 \centering
 \caption{Divisão de responsabilidades e atribuições da equipe (Parte 2).}
 \label{tab:equipe}
@@ -639,6 +635,6 @@ Vicente Pianezzola & 00587456 & [\,\,] & [\,\,] & [\,\,] & \textit{[A preencher 
 \section{Conclusão}
 % ============================================================================
 
-A implementação da Parte 2 estendeu o serviço de soma sobre UDP para um cluster tolerante a falhas com replicação ativa, ordenação total, quórum de maioria simples, monitoramento por \textit{heartbeats} adaptativos e eleição de líder em anel. Os 105 testes unitários e os 5 cenários E2E com processos reais (1.300.000 requisições) confirmaram que a soma acumulada permanece 100\% exata mesmo sob quedas abruptas do \textit{Front-End}, quedas de réplicas, bloqueio temporário por ausência de quórum e reingresso dinâmico de servidores. O principal compromisso observado foi o \textit{overhead} de $\approx 7{,}4\times$ na vazão local em relação à Parte 1, esperado diante do custo de coordenação distribuída e da execução concorrente de todos os processos na mesma máquina.
+A evolução da Parte 1 para a Parte 2 mostrou na prática o custo e os cuidados envolvidos em tornar um serviço UDP tolerante a falhas. Mesmo com quedas abruptas do líder ou de réplicas, bloqueio por ausência de quórum e entrada de novos servidores sob carga, o cluster manteve a soma exata tanto nos testes locais quanto na rede com 4 máquinas. Em contrapartida, a coordenação distribuída (multicast, quórum e threads extras) reduziu a vazão local em cerca de $7{,}4\times$ frente ao servidor único da Parte 1, um compromisso esperado para garantir consistência e continuidade do serviço.
 
 \end{document}
