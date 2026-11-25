@@ -49,6 +49,7 @@ def handle_join(self, m, addr):
     if self.leader != self.ip or source == self.ip:
         return
     if source not in self.view:
+        # RM novato: adiciona em join_waiters para pausar novas admissões até o pipeline esvaziar.
         self.join_waiters.add(source)
     snapshot = m.payload.get('snap')
     if (source in self.view or source in self.monitors) and snapshot is not None:
@@ -59,14 +60,15 @@ def handle_join(self, m, addr):
             return
         if snapshot[0] > self.state.num_reqs:
             if self.pending:
-                return  # The replica may already have applied the pending operation.
-            # A live participant can still supply history the candidate did not have.
+                return  # Não sobrescreve enquanto há op em voo (o RM pode já tê-la aplicado).
+            # Adota o estado mais avançado reportado por um sobrevivente e exige novo READY de todos.
             self.state.restore(snapshot)
             self.cancel_work()
             self.ready = False
             self.awaiting_ready = set(self.view) - {self.ip}
             self.interface.log('RECOVERY newer state', source, 'seq', snapshot[0])
         self.awaiting_reports.discard(source)
+    # Aguarda todos os sobreviventes conhecidos reportarem antes de distribuir o SNAP consolidado.
     if self.awaiting_reports:
         return
     if not self.ready:

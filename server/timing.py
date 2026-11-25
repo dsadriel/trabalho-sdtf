@@ -22,6 +22,7 @@ class PeerMonitor:
         return max(self.minimum, value)
 
     def observe(self, sample):
+        """Atualiza a média móvel exponencial (EWMA) do RTT: peso alpha=0.125 para a nova amostra."""
         if not math.isfinite(sample) or sample < 0:
             return
         if self.average_rtt is None:

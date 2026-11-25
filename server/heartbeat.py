@@ -74,15 +74,19 @@ def tick(self):
                                'rtt_ms', rtt_ms)
             if monitor.failures >= HEARTBEAT_FAILURES:
                 if self.leader == self.ip:
+                    # FE detectou queda de um RM: remove o nó morto de todas as estruturas.
                     if peer in self.view:
                         self.view.remove(peer)
                     self.join_waiters.discard(peer)
                     self.awaiting_reports.discard(peer)
                     self.awaiting_ready.discard(peer)
+                    # Se o RM morto era o último bloqueando a barreira pós-eleição, libera o envio de SNAP.
                     if not self.awaiting_reports:
                         for waiting in self.awaiting_ready:
                             recovery.send_snapshot(self, waiting)
                     recovery.finish_sync(self)
+                    # Caso crítico (0 RMs ativos): cancela ops que nunca atingiriam quórum,
+                    # preservando join_waiters para evitar deadlock no reingresso de réplicas.
                     if len(self.view) <= 1:
                         waiters = set(self.join_waiters)
                         self.cancel_work()
@@ -94,10 +98,11 @@ def tick(self):
                         self.interface.log('RM timeout', peer, 'members', self.view,
                                            'quorum', required(len(self.view) - 1))
                     with self.cv:
-                        self.cv.notify_all()
+                        self.cv.notify_all()  # Acorda ops que agora podem ter atingido maioria.
                     self.announce()
                     monitor.cancel()
                     continue
+                # RM detectou queda do FE após 3 perdas consecutivas: inicia eleição em anel.
                 self.elect()
                 break
         if monitor.probe is None and now >= monitor.next_probe:

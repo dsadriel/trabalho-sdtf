@@ -76,26 +76,40 @@ def handle_request(sock, addr, msg: Message, state: ServerState,
     try:
         with self.cv:
             while active(self, epoch):
+                # Garante que existe um ClientRecord (na primeira vez cria com last_req=0).
                 client = state.register_client(addr[0], addr[1], session=session)
+
+                # Portão 1: duplicata já confirmada anteriormente — devolve o ACK salvo sem replicar.
                 if msg.id_req <= client.last_req:
                     respond(self, task, Message.ack(client.last_req, client.last_num_reqs, client.last_total_sum))
                     log_result = ('DUPLICATE', client.last_num_reqs, client.last_total_sum)
                     return
-                # Preserve the per-client order while allowing other clients to progress.
+
+                # Portão 2: ordem por cliente (mesma sessão).
+                # Se existe outro worker ativo da mesma sessão com id_req menor, aguarda sua conclusão;
+                # clientes distintos possuem chaves diferentes e avançam em paralelo.
                 preceding = any(key[0] == epoch and key[1] == task.key[1] and key[2] < msg.id_req
                                 for key in self.request_workers)
                 if preceding:
                     self.cv.wait()
                     continue
+
+                # Portão 3: lacuna de histórico (HISTORY_GAP).
+                # Só chegamos aqui sem pedidos anteriores da mesma sessão em voo; se id_req saltou,
+                # recusa sem somar para não devolver uma soma incompleta ao cliente.
                 if msg.id_req > client.last_req + 1:
                     respond(self, task, Message('HISTORY_GAP', session=session, id_req=msg.id_req,
                             last_req=client.last_req, num_reqs=state.num_reqs, total_sum=state.total_sum))
                     self.interface.log('HISTORY GAP', session, 'requested', msg.id_req,
                                        'last_req', client.last_req, 'seq', state.num_reqs)
                     return
+
+                # Portão 4: barreira de ingresso de novo RM, mínimo de 1 RM ativo e limite do pipeline.
                 if self.join_waiters or len(self.view) <= 1 or len(self.pending) >= MAX_INFLIGHT_OPERATIONS:
                     self.cv.wait()
                     continue
+
+                # Admissão: sincroniza contadores especulativos se o pipeline estava vazio e reserva seq.
                 if not self.pending:
                     self.next_sequence, self.reserved_total = state.num_reqs, state.total_sum
                 self.next_sequence += 1
@@ -109,6 +123,8 @@ def handle_request(sock, addr, msg: Message, state: ServerState,
             retry_at = 0.0
             while active(self, epoch) and not operation.cancelled:
                 confirmed = operation.confirmed(self.view)
+                # Commit ordenado por prefixo: só aplica em ServerState e envia ACK quando
+                # atingir quórum E for exatamente a próxima sequência esperada (num_reqs + 1).
                 if confirmed and operation.sequence == state.num_reqs + 1:
                     status, number, total = state.process_request(
                         addr[0], msg.id_req, msg.value, addr[1], session=session)
@@ -118,14 +134,16 @@ def handle_request(sock, addr, msg: Message, state: ServerState,
                         self.interface.log('STATE CONFLICT during confirmation', operation.sequence)
                         return
                     self.pending.pop(operation.key)
+                    # Responde ao endereço original e a eventuais retransmissões acopladas à mesma tarefa.
                     respond(self, task, Message.ack(msg.id_req, number, total))
                     log_result = (status, number, total)
-                    self.cv.notify_all()
+                    self.cv.notify_all()  # Acorda a thread de seq + 1.
                     if not self.pending:
                         from server.recovery import resume_joins
                         resume_joins(self)
-                        self.announce()  # Publish the confirmed prefix for RM cache collection.
+                        self.announce()  # Divulga o prefixo confirmado para os RMs limparem o cache.
                     return
+                # Enquanto não atingir quórum, dissemina/retransmite OP em multicast a cada 0,2s.
                 if not confirmed and CLOCK() >= retry_at:
                     try:
                         self.send(MULTICAST_GROUP, 'OP', epoch=epoch, op=operation.packet,
@@ -133,9 +151,11 @@ def handle_request(sock, addr, msg: Message, state: ServerState,
                     except OSError as exc:
                         self.interface.log('OP send failed', operation.sequence, exc)
                     retry_at = CLOCK() + OP_RETRY_INTERVAL
+                # Libera self.cv durante a espera (sem timeout se já atingiu quórum e só aguarda seq - 1).
                 self.cv.wait(None if confirmed else max(0.0, retry_at - CLOCK()))
     finally:
         with self.cv:
+            # Limpeza por identidade (`is`) para não remover um worker recém-criado em retentativa rápida.
             if operation is not None and self.pending.get(operation.key) is operation:
                 operation.cancelled = True
                 self.pending.pop(operation.key)

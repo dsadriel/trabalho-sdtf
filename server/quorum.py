@@ -1,5 +1,5 @@
 def required(replica_count: int) -> int:
-    """Majority of active RMs; requires at least 1 RM to confirm."""
+    """Maioria simples dos RMs ativos; com 0 RMs exige 1 (inatingível, bloqueia confirmações)."""
     if replica_count <= 0:
         return 1
     return (replica_count // 2) + 1
@@ -12,4 +12,4 @@ def handle_result(self, message, addr):
     operation = self.pending.get((self.epoch, fields.get('seq')))
     if operation is not None and operation.acknowledge(
             addr[0], fields['epoch'], fields.get('seq'), fields.get('total'), self.view):
-        self.cv.notify_all()
+        self.cv.notify_all()  # Acorda handle_request() para reavaliar quórum e prefixo.

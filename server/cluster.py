@@ -114,6 +114,8 @@ class Node:
             self.leader = self.coordinator = self.ip
             self.term = self.term + 1 if term is None else term
             self.epoch = uuid.uuid4().hex
+            # Barreira pós-eleição: permanece com ready=False (sem responder clientes) até
+            # coletar os snapshots dos sobreviventes (awaiting_reports) e receber READY (awaiting_ready).
             self.ready = False
             self.ballot = self.election_deadline = None
             self.hop.clear()

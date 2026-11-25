@@ -11,14 +11,16 @@ def number(ip):
 def forward(self, token):
     ring = token['ring']
     pos = ring.index(self.ip)
+    # Fila circular de sucessores no anel: quem vem depois de mim seguido de quem vem antes.
     peers = (ring[pos+1:] + ring[:pos])
-    self.hop[token['uid']] = [token, peers, 0, 0, 0]
+    self.hop[token['uid']] = [token, peers, 0, 0, 0]  # [token, fila, índice, sent, deadline]
     self.retry(token['uid'])
 
 
 def retry(self, uid):
     token, peers, i, _, _ = self.hop[uid]
     if i >= len(peers):
+        # Nenhum outro nó do anel respondeu HOP_ACK; se só eu estou em path, sou o único vivo.
         self.hop.pop(uid)
         if self.ballot and token['path'] == [self.ip]:
             self.view = [self.ip]
@@ -27,17 +29,20 @@ def retry(self, uid):
     dest = peers[i]
     self.interface.log('ELECTION forward', self.ip, '->', dest)
     now = CLOCK()
+    # Avança o índice para pular o sucessor atual caso o prazo de HOP_ACK expire.
     self.hop[uid][2:] = [i+1, now, now + self.monitor_for(dest).timeout]
     self.send(dest, 'TOKEN', token=token)
 
 
 def elect(self):
+    # Remove o líder antigo e ordena os RMs restantes por IPv4 numérico crescente.
     ring = sorted(set(self.view) - {self.leader} | {self.ip}, key=number)
     self.interface.log('FE timeout', self.leader, 'ELECTION start', self.ip)
     self.view = ring
     self.leader = None
     self.ready = False
     self.cancel_work()
+    # Prazo global de segurança: reinicia a eleição caso TOKEN ou WIN se percam no UDP.
     self.ballot = CLOCK()
     self.election_deadline = self.ballot + 2 * sum(
         self.monitor_for(peer).timeout for peer in ring
@@ -54,9 +59,10 @@ def handle_token(self, m, addr):
     t=m.payload['token']
     if t['epoch']!=self.epoch or self.ip not in t['ring']:
         return
+    # Confirmação salto-a-salto: cancela o temporizador de retry() no nó anterior.
     self.send(src,'HOP_ACK',uid=t['uid'],epoch=self.epoch)
     if self.ballot is None and self.leader != self.ip:
-        # Receiving a valid election token also makes this node a participant.
+        # Ao receber um token válido, este RM entra na eleição mesmo antes do seu próprio timeout.
         self.leader = None
         self.ready = False
         self.cancel_work()
@@ -66,9 +72,11 @@ def handle_token(self, m, addr):
             self.monitor_for(peer).timeout for peer in t['ring'])
     self.interface.log('ELECTION received', src, 'at',self.ip)
     if self.ip in t['path']:
+        # O token completou a volta no anel: escolhe o maior IP visitado e notifica WIN.
         winner=max(t['path'],key=number)
         self.send(winner,'WIN',epoch=self.epoch,snap=t['snap'],members=t['path'],term=t.get('term',self.term + 1))
     elif t['uid'] not in self.tokens:
+        # self.tokens evita reencaminhar o mesmo token se um HOP_ACK se perder.
         self.tokens.add(t['uid'])
         t['path'].append(self.ip)
         if self.state.num_reqs>t['snap'][0]:
