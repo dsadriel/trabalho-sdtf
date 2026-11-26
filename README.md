@@ -10,6 +10,15 @@ O sistema organiza os servidores em um cluster com separação de papéis entre 
 
 Python 3.11+, sem dependências externas, em uma rede local com multicast IPv4 habilitado.
 
+Na raiz do projeto, prepare e verifique os arquivos Python com o script automatizado:
+
+```bash
+make
+make test
+```
+
+Python não exige compilação para código nativo; `make` verifica e pré-compila os módulos. Para executar com o Makefile, use `make server PORT=4000` e `make client PORT=4000`. Para o modo local, acrescente `ARGS=--local` a cada comando.
+
 Inicie os servidores um de cada vez em máquinas distintas:
 
 ```bash

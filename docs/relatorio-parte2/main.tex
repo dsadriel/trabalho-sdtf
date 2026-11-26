@@ -611,21 +611,21 @@ Ferramentas de IA generativa (Antigravity/Gemini e Codex) foram usadas como apoi
 
 \subsection{Divisão de Responsabilidades e Atribuições da Equipe}
 
-A Tabela~\ref{tab:equipe} registra as responsabilidades de cada integrante na Parte 2.
+A equipe discutiu em conjunto a arquitetura, os resultados e a revisão do relatório. A Tabela~\ref{tab:equipe} reúne as contribuições individuais e os respectivos escopos de responsabilidade.
 
 \begin{table}[H]
 \centering
 \caption{Divisão de responsabilidades e atribuições da equipe (Parte 2).}
 \label{tab:equipe}
 \small
-\begin{tabularx}{\textwidth}{l c c c c X}
+\begin{tabularx}{\textwidth}{l c X}
 \toprule
-\textbf{Integrante} & \textbf{Matrícula} & \textbf{Arq.} & \textbf{Impl.} & \textbf{Testes} & \textbf{Componentes / Escopo} \\
+\textbf{Integrante} & \textbf{Matrícula} & \textbf{Contribuições e escopo de responsabilidade} \\
 \midrule
-Adriel Souza & 00579100 & [\,\,] & [\,\,] & [\,\,] & \textit{[A preencher pela equipe]} \\
-Gabriel Richter & 00587414 & [\,\,] & [\,\,] & [\,\,] & \textit{[A preencher pela equipe]} \\
-Nicolas Chin Lee & 00579322 & [\,\,] & [\,\,] & [\,\,] & \textit{[A preencher pela equipe]} \\
-Vicente Pianezzola & 00587456 & [\,\,] & [\,\,] & [\,\,] & \textit{[A preencher pela equipe]} \\
+Adriel Souza & 00579100 & Concepção inicial da arquitetura, implementação da maioria simples e da suíte E2E, e testes em rede local. Responsável pelo escopo de eleição e detecção de falhas (\texttt{election}, \texttt{heartbeat}, \texttt{timing}). \\
+Gabriel Richter & 00587414 & Implementação da base dos módulos, incluindo comunicação entre FE e RMs e alterações no cliente; contribuição ao timeout adaptativo e à recuperação por snapshots. Responsável pelo escopo de replicação e quórum (\texttt{replication}, \texttt{quorum}, \texttt{operations}). \\
+Nicolas Chin Lee & 00579322 & Testes de eleição e recuperação, incluindo a investigação da perda de token. Responsável pelo escopo de estado e recuperação por snapshot (\texttt{state}, \texttt{recovery}). \\
+Vicente Pianezzola & 00587456 & Testes locais de corretude, quedas e vazão. Responsável pelo escopo de cliente, comunicação e fluxo do FE (\texttt{client/}, \texttt{common/}, \texttt{processing}, \texttt{cluster}, \texttt{transport}, \texttt{discovery}). \\
 \bottomrule
 \end{tabularx}
 \end{table}
