@@ -5,6 +5,7 @@ from server.quorum import required
 
 
 def request_snapshot(self):
+    self.interface.log('SNAPSHOT requested', 'leader', self.leader, 'local_seq', self.state.num_reqs)
     self.send(self.leader, 'JOIN', snap=self.state.snapshot())
 
 
@@ -29,7 +30,9 @@ def follow(self, source, epoch, term, members):
 
 
 def send_snapshot(self, destination):
-    self.send(destination, 'SNAP', snap=self.state.snapshot(), epoch=self.epoch,
+    snapshot = self.state.snapshot()
+    self.interface.log('SNAPSHOT sent', 'to', destination, 'seq', snapshot[0])
+    self.send(destination, 'SNAP', snap=snapshot, epoch=self.epoch,
               term=self.term, members=self.view)
 
 
@@ -102,6 +105,7 @@ def handle_snap(self, m, addr):
         self.interface.log('STATE CONFLICT', source, 'seq', snapshot[0])
         return
     self.state.restore(snapshot)
+    self.interface.log('SNAPSHOT installed', 'from', source, 'seq', snapshot[0])
     self.cancel_work()
     self.ready = True
     self.view = m.payload.get('members', self.view)

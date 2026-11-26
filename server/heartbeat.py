@@ -49,6 +49,7 @@ def tick(self):
     elif self.leader is None:
         if self.ballot is not None:
             if now >= self.election_deadline:
+                self.interface.log('ELECTION deadline expired', 'restarting election')
                 self.elect()
         else:
             if now >= self.next_join:

@@ -61,6 +61,7 @@ def handle_token(self, m, addr):
         return
     # Confirmação salto-a-salto: cancela o temporizador de retry() no nó anterior.
     self.send(src,'HOP_ACK',uid=t['uid'],epoch=self.epoch)
+    self.interface.log('ELECTION HOP_ACK sent', 'to', src, 'token', t['uid'])
     if self.ballot is None and self.leader != self.ip:
         # Ao receber um token válido, este RM entra na eleição mesmo antes do seu próprio timeout.
         self.leader = None
@@ -91,6 +92,7 @@ def handle_hop_ack(self, m, addr):
     _, peers, index, sent, deadline = hop
     now = CLOCK()
     if index and addr[0] == peers[index - 1] and now <= deadline:
+        self.interface.log('ELECTION HOP_ACK received', 'from', addr[0], 'token', m.payload['uid'])
         self.monitor_for(addr[0]).observe(now - sent)
         self.hop.pop(m.payload['uid'])
 
